@@ -1,12 +1,12 @@
-# all writen with gpt, but hey it works :D
+# all written with gpt, but hey it works :D
 # rundown what it does:
-## downloads all files from a public google folder
+## downloads all files from a public Google folder
 ## puts them in an import folder
-## slaps that data into a csv which looks like: DATE | ORIGINAL FILE NAME | NEW FILE NAME | S-UL.EU URL
-## asks for user imput to rename files that are not listed yet in the csv
+## slaps that data into a CSV: DATE | ORIGINAL FILE NAME | NEW FILE NAME | S-UL.EU URL
+## asks for user input to rename files that are not listed yet in the CSV
 ## copies those renamed files to an export folder
 ## uploads the files that were renamed to s-ul.eu
-## fills on the csv with the renames and urls
+## fills on the CSV with the renames and URLs
 
 
 import os
