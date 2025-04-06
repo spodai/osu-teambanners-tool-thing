@@ -7,7 +7,7 @@
 
 ## Usage:
 # 1. Make a new folder, name it "team banners" or however you like
-# 2. Copy paste this team_banners.py this this folder
+# 2. Copy paste this team_banners.py in this folder
 # 3.1 Execute the script
 # 3.2 Enter the public Google Drive folder ID or URL
 # 3.3 Enter the s-ul.eu API key (found here: https://s-ul.eu/account/configurations)
