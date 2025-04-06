@@ -31,6 +31,8 @@
 #     ├── TEAM4.jpg
 #     └── TEAM5.jpg
 
+## Download all the libraries:
+# pip install requests gdown tabulate configparser
 
 import os
 import shutil
