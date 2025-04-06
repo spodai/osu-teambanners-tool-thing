@@ -13,10 +13,11 @@
 # 3.3 Enter the s-ul.eu API key (found here: https://s-ul.eu/account/configurations)
 # 4. Enter 1 to exececute the main script
 
-# The dir the script makes looks like this:
+## The dir the script makes looks like this:
 # .
 # ├── settings.conf
 # ├── script.py
+# ├── index.csv
 # ├── Images import
 # │   ├── image_01.jpg
 # │   ├── image_02.jpg
@@ -29,7 +30,6 @@
 #     ├── TEAM3.jpg
 #     ├── TEAM4.jpg
 #     └── TEAM5.jpg
-
 
 
 import os
@@ -164,7 +164,7 @@ def read_uploaded_files(csv_path):
 
 def show_csv(csv_path):
     clear_screen()
-    print("=== Index.csv ===")
+    print("=== index.csv ===")
     if not os.path.exists(csv_path):
         print("No CSV data yet.")
         return
@@ -291,7 +291,7 @@ def start_script(config):
     base_dir = config["base_dir"]
     import_path = os.path.join(base_dir, "Images import")
     export_path = os.path.join(base_dir, "Images export")
-    csv_path = os.path.join(base_dir, "Index.csv")
+    csv_path = os.path.join(base_dir, "index.csv")
 
     download_drive_folder(config["drive_id"], import_path)
     uploaded = read_uploaded_files(csv_path)
@@ -309,7 +309,7 @@ def menu():
     init_config()
     config = load_config()
     base_dir = config["base_dir"]
-    csv_path = os.path.join(base_dir, "Index.csv")
+    csv_path = os.path.join(base_dir, "index.csv")
 
     while True:
         print("\n=== Main Menu ===")
