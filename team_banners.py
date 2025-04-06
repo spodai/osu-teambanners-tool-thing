@@ -1,126 +1,304 @@
 # all written with gpt, but hey it works :D
-# rundown what it does:
-## downloads all files from a public Google folder
-## puts them in an import folder
-## slaps that data into a CSV: DATE | ORIGINAL FILE NAME | NEW FILE NAME | S-UL.EU URL
-## asks for user input to rename files that are not listed yet in the CSV
-## copies those renamed files to an export folder
-## uploads the files that were renamed to s-ul.eu
-## fills on the CSV with the renames and URLs
-
-
 import os
 import shutil
 import requests
 import gdown
 import csv
+import configparser
 from datetime import datetime
+from tabulate import tabulate
 
-# --- CONFIG ---
-DRIVE_FOLDER_ID = ''
-IMPORT_FOLDER = ""
-EXPORT_FOLDER = ""
-CSV_PATH = ""
+CONFIG_FILE = "settings.conf"
 
-SUL_UPLOAD_URL = "https://s-ul.eu/api/v1/upload"
-SUL_API_KEY = ""
+def init_config():
+    if not os.path.exists(CONFIG_FILE):
+        print("Config not found. Let's set it up.")
+        drive_id = input("Enter Google Drive folder ID or URL: ").strip()
+        api_key = input("Enter s-ul.eu API key: ").strip()
+        base_dir = os.path.dirname(os.path.abspath(__file__))
 
-# --- FUNCTIONS ---
-def create_folder_if_not_exists(folder_path):
-    """Creates the folder if it does not exist."""
-    if not os.path.exists(folder_path):
-        os.makedirs(folder_path)
+        config = configparser.ConfigParser()
+        config['DEFAULT'] = {
+            'drive_id': drive_id,
+            'api_key': api_key,
+            'base_dir': base_dir
+        }
 
-def download_drive_folder(folder_id, download_path):
-    create_folder_if_not_exists(download_path)
-    url = f"https://drive.google.com/drive/folders/{folder_id}"
+        with open(CONFIG_FILE, 'w') as configfile:
+            config.write(configfile)
+        print("Config saved.\n")
+
+def load_config():
+    config = configparser.ConfigParser()
+    config.read(CONFIG_FILE)
+    return config['DEFAULT']
+
+def clear_screen():
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+def update_settings():
+    config = configparser.ConfigParser()
+    config.read(CONFIG_FILE)
+
+    while True:
+        clear_screen()
+        current = config['DEFAULT']
+        print("=== Settings Menu ===\n")
+        print(f"1. Google Drive Folder ID/URL: {current['drive_id']}")
+        print(f"2. S-UL API Key: {current['api_key']}")
+        print(f"3. Base Folder: {current['base_dir']}")
+        print("4. Exit Settings Menu")
+
+        choice = input("\nChoose setting to change (1-4): ").strip()
+
+        if choice == '1':
+            new_id = input("Enter new Google Drive Folder ID or URL: ").strip()
+            config['DEFAULT']['drive_id'] = new_id
+        elif choice == '2':
+            new_key = input("Enter new S-UL API key: ").strip()
+            config['DEFAULT']['api_key'] = new_key
+        elif choice == '3':
+            new_path = input("Enter new base folder path: ").strip()
+            if os.path.isdir(new_path):
+                config['DEFAULT']['base_dir'] = new_path
+            else:
+                input("[ERROR] Invalid folder path. Press Enter to continue...")
+                continue
+        elif choice == '4':
+            clear_screen()
+            break
+        else:
+            input("Invalid option. Press Enter to continue...")
+            continue
+
+        with open(CONFIG_FILE, 'w') as configfile:
+            config.write(configfile)
+        input("[OK] Setting updated! Press Enter to continue...")
+
+
+def download_drive_folder(drive_id, download_path):
+    os.makedirs(download_path, exist_ok=True)
+    url = f"https://drive.google.com/drive/folders/{drive_id}" if "drive.google.com" not in drive_id else drive_id
     print(f"Downloading from {url}")
     gdown.download_folder(url, quiet=False, use_cookies=False, output=download_path)
 
-def read_csv_for_uploaded_files(csv_path):
-    """Reads the CSV file and returns a list of already uploaded filenames."""
-    uploaded_files = set()
+def prompt_rename_images(import_path, export_path, uploaded_files, csv_path):
+    os.makedirs(export_path, exist_ok=True)
+    renamed = []
+    existing_renamed = set()
     if os.path.exists(csv_path):
-        with open(csv_path, mode="r", encoding="utf-8") as f:
-            reader = csv.reader(f)
-            next(reader)  # Skip the header
+        with open(csv_path, 'r', newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
             for row in reader:
-                uploaded_files.add(row[1])  # The original filename is at index 1
-    return uploaded_files
+                existing_renamed.add(row['Original'])
 
-def prompt_rename_images(import_path, export_path, uploaded_files):
-    create_folder_if_not_exists(export_path)
-    renamed_files = []
-
-    for filename in os.listdir(import_path):
-        full_path = os.path.join(import_path, filename)
-        if not os.path.isfile(full_path):
+    for file in os.listdir(import_path):
+        if file in uploaded_files or file in existing_renamed:
             continue
-
-        if filename in uploaded_files:
-            print(f"Skipping {filename}, already uploaded.")
+        src = os.path.join(import_path, file)
+        if not os.path.isfile(src):
             continue
+        print(f"\nOriginal filename: {file}")
+        new_name = input("New name (no ext): ").strip()
+        ext = os.path.splitext(file)[1]
+        dest = os.path.join(export_path, new_name + ext)
+        shutil.copy(src, dest)
+        renamed.append((file, new_name + ext, dest))
+    return renamed
 
-        print(f"\nOriginal filename: {filename}")
-        new_name = input("Enter new name (without extension): ").strip()
-        ext = os.path.splitext(filename)[1]
-        new_filename = new_name + ext
-        new_path = os.path.join(export_path, new_filename)
-        shutil.copy(full_path, new_path)
-
-        renamed_files.append((filename, new_filename, new_path))
-    return renamed_files
-
-def upload_to_sul(file_path):
+def upload_to_sul(file_path, api_key):
     with open(file_path, "rb") as f:
         files = {"file": f}
-        data = {
-            "wizard": "true",
-            "key": SUL_API_KEY
-        }
-        response = requests.post(SUL_UPLOAD_URL, data=data, files=files)
-        response.raise_for_status()
-        return response.json()["url"]
+        data = {"wizard": "true", "key": api_key}
+        res = requests.post("https://s-ul.eu/api/v1/upload", data=data, files=files)
+        res.raise_for_status()
+        return res.json()["url"]
 
-def write_to_csv(csv_path, rows):
-    file_exists = os.path.isfile(csv_path)
-    with open(csv_path, mode="a", newline='', encoding="utf-8") as f:
+def write_to_csv(csv_path, data):
+    write_header = not os.path.exists(csv_path)
+    with open(csv_path, "a", newline='', encoding="utf-8") as f:
         writer = csv.writer(f)
-        if not file_exists:
-            writer.writerow(["date_downloaded", "original_filename", "renamed_filename", "s-ul.eu_url"])
-        for row in rows:
-            writer.writerow(row)
+        if write_header:
+            writer.writerow(["Timestamp", "Original", "Renamed", "URL"])
+        for row in data:
+            writer.writerow([datetime.now(), row[0], row[1], row[2]])
 
-# --- MAIN ---
-def main():
-    print(">> Step 1: Downloading Google Drive folder...")
-    download_drive_folder(DRIVE_FOLDER_ID, IMPORT_FOLDER)
+def read_uploaded_files(csv_path):
+    if not os.path.exists(csv_path):
+        return set()
+    with open(csv_path, newline='', encoding="utf-8") as f:
+        return {row[0] for i, row in enumerate(csv.reader(f)) if i != 0}
 
-    # Read the existing uploaded files from CSV
-    uploaded_files = read_csv_for_uploaded_files(CSV_PATH)
+def show_csv(csv_path):
+    clear_screen()
+    if not os.path.exists(csv_path):
+        print("No CSV data yet.")
+        return
+    with open(csv_path, encoding="utf-8") as f:
+        table = list(csv.reader(f))
+    print("\n" + tabulate(table[1:], headers=table[0], tablefmt="grid"))
 
-    print("\n>> Step 2: Renaming files...")
-    renamed = prompt_rename_images(IMPORT_FOLDER, EXPORT_FOLDER, uploaded_files)
+def rename_existing_item(csv_path, base_dir, config):
+    clear_screen()
+    if not os.path.exists(csv_path):
+        print("CSV file not found.")
+        return
 
-    print("\n>> Step 3: Uploading to s-ul.eu...")
-    log_rows = []
-    for orig_name, renamed_name, path in renamed:
-        print(f"Uploading {renamed_name}...")
-        try:
-            url = upload_to_sul(path)
-            log_rows.append([
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                orig_name,
-                renamed_name,
-                url
-            ])
-        except Exception as e:
-            print(f"Failed to upload {renamed_name}: {e}")
+    with open(csv_path, 'r', newline='', encoding='utf-8') as csvfile:
+        reader = list(csv.DictReader(csvfile))
 
-    print("\n>> Step 4: Writing index CSV...")
-    write_to_csv(CSV_PATH, log_rows)
+    if not reader:
+        print("No entries found in the CSV.")
+        return
 
-    print("\n✅ All done!")
+    print("\n=== Existing Items ===")
+    for idx, row in enumerate(reader, start=1):
+        print(f"{idx}. {row['Renamed']} (Original: {row['Original']})")
+
+    try:
+        choice = int(input("\nEnter the number of the item you want to rename: ").strip()) - 1
+        if choice < 0 or choice >= len(reader):
+            print("Invalid choice.")
+            return
+    except ValueError:
+        print("Please enter a valid number.")
+        return
+
+    selected_row = reader[choice]
+    old_name = selected_row['Renamed']
+    original_name = selected_row['Original']
+    old_url = selected_row['URL']
+    name_root, ext = os.path.splitext(old_name)
+
+    new_name_input = input(f"Enter the new name for '{old_name}' (without extension): ").strip()
+    if not new_name_input:
+        print("Name cannot be empty.")
+        return
+
+    new_name = f"{new_name_input}{ext}"
+
+    old_path = os.path.join(base_dir, "Images export", old_name)
+    new_path = os.path.join(base_dir, "Images export", new_name)
+
+    renamed_success = False
+    try:
+        if os.path.exists(old_path):
+            os.rename(old_path, new_path)
+            renamed_success = True
+        else:
+            print(f"File not found: {old_path}")
+            return
+    except Exception as e:
+        print(f"Failed to rename file: {e}")
+        return
+
+    if renamed_success:
+        # Update the row
+        reader[choice]['Renamed'] = new_name
+
+        reupload = input("Do you want to re-upload this file? (y/n): ").strip().lower()
+        if reupload == 'y':
+            try:
+                url = upload_to_sul(new_path, config['api_key'])
+                reader[choice]['URL'] = url
+                print(f"[OK] File re-uploaded. New URL: {url}")
+            except requests.exceptions.RequestException as e:
+                print(f"[ERROR] re-upload failed: {e}")
+            except KeyError:
+                print("[ERROR] Could not retrieve upload URL.")
+        elif reupload == 'n':
+            print("Skipping re-upload.")
+        else:
+            print("Invalid choice. Skipping re-upload.")
+
+        # Save back to CSV
+        with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
+            fieldnames = reader[0].keys()
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(reader)
+
+        print("[OK] File renamed and CSV updated.")
+
+def delete_entry(csv_path, base_dir):
+    if not os.path.exists(csv_path):
+        print("CSV file not found.")
+        return
+
+    with open(csv_path, newline='', encoding="utf-8") as f:
+        rows = list(csv.reader(f))
+
+    for idx, row in enumerate(rows[1:], 1):
+        print(f"{idx}. {row[2]}")
+
+    choice = input("Which entry to delete (number): ")
+    try:
+        i = int(choice)
+        removed = rows.pop(i)
+        print(f"Removed: {removed}")
+        for folder in ["Images import", "Images export"]:
+            path = os.path.join(base_dir, folder, removed[2])
+            if os.path.exists(path):
+                os.remove(path)
+    except:
+        print("Invalid input.")
+        return
+
+    with open(csv_path, "w", newline='', encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerows(rows)
+
+def start_script(config):
+    base_dir = config["base_dir"]
+    import_path = os.path.join(base_dir, "Images import")
+    export_path = os.path.join(base_dir, "Images export")
+    csv_path = os.path.join(base_dir, "images.csv")
+
+    download_drive_folder(config["drive_id"], import_path)
+    uploaded = read_uploaded_files(csv_path)
+    renamed = prompt_rename_images(import_path, export_path, uploaded, csv_path)
+
+    new_rows = []
+    for original, new_name, path in renamed:
+        url = upload_to_sul(path, config["api_key"])
+        new_rows.append((original, new_name, url))
+        print(f"Uploaded: {url}")
+
+    write_to_csv(csv_path, new_rows)
+
+def menu():
+    init_config()
+    config = load_config()
+    base_dir = config["base_dir"]
+    csv_path = os.path.join(base_dir, "images.csv")
+
+    while True:
+        print("\n=== Main Menu ===")
+        print("1. Start script")
+        print("2. Show CSV data")
+        print("3. Change settings")
+        print("4. Delete item")
+        print("5. Rename item")
+        print("6. Exit")
+
+        choice = input("> ").strip()
+
+        if choice == "1":
+            start_script(config)
+        elif choice == "2":
+            show_csv(csv_path)
+        elif choice == "3":
+            update_settings()
+            config = load_config()
+        elif choice == "4":
+            delete_entry(csv_path, base_dir)
+        elif choice == "5":
+            rename_existing_item(csv_path, base_dir, config)
+        elif choice == "6":
+            break
+        else:
+            print("Invalid choice.")
+
 
 if __name__ == "__main__":
-    main()
+    menu()
