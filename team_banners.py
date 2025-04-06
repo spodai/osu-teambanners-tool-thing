@@ -164,6 +164,7 @@ def read_uploaded_files(csv_path):
 
 def show_csv(csv_path):
     clear_screen()
+    print("=== Index.csv ===")
     if not os.path.exists(csv_path):
         print("No CSV data yet.")
         return
@@ -229,6 +230,8 @@ def rename_existing_item(csv_path, base_dir, config):
         # Update the row
         reader[choice]['Renamed'] = new_name
 
+        print("[WARNING] First manually delete the already uploaded file before re-uploading! Else the original URL will return without changes to it's name.")
+        print("[WARNING] Uploaded files cannot be renamed in s-ul frontend.")
         reupload = input("Do you want to re-upload this file? (y/n): ").strip().lower()
         if reupload == 'y':
             try:
@@ -254,6 +257,9 @@ def rename_existing_item(csv_path, base_dir, config):
         print("[OK] File renamed and CSV updated.")
 
 def delete_entry(csv_path, base_dir):
+    clear_screen()
+    print("=== Delete file ===")
+    print("[WARNING] This script cannot delete file using the s-ul API.")
     if not os.path.exists(csv_path):
         print("CSV file not found.")
         return
@@ -285,7 +291,7 @@ def start_script(config):
     base_dir = config["base_dir"]
     import_path = os.path.join(base_dir, "Images import")
     export_path = os.path.join(base_dir, "Images export")
-    csv_path = os.path.join(base_dir, "images.csv")
+    csv_path = os.path.join(base_dir, "Index.csv")
 
     download_drive_folder(config["drive_id"], import_path)
     uploaded = read_uploaded_files(csv_path)
@@ -303,7 +309,7 @@ def menu():
     init_config()
     config = load_config()
     base_dir = config["base_dir"]
-    csv_path = os.path.join(base_dir, "images.csv")
+    csv_path = os.path.join(base_dir, "Index.csv")
 
     while True:
         print("\n=== Main Menu ===")
