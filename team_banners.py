@@ -1,4 +1,37 @@
-# all written with gpt, but hey it works :D
+## All written with GPT and Gemini (honestly Gemini did the harder cooking), but hey it works :D
+# This is a tool for fetching files from a public Google Drive and then uploading them to s-ul.eu using API
+# It makes a Config file for saving the drive ID and API key 
+# It also makes a CSV file with: Timestamp,Original,Renamed,URL
+# It also includes ways to delete and rename/reupload specific files
+# You can run the main script multiple times, as it skips over all files already in the CSV file. 
+
+## Usage:
+# 1. Make a new folder, name it "team banners" or however you like
+# 2. Copy paste this team_banners.py this this folder
+# 3.1 Execute the script
+# 3.2 Enter the public Google Drive folder ID or URL
+# 3.3 Enter the s-ul.eu API key (found here: https://s-ul.eu/account/configurations)
+# 4. Enter 1 to exececute the main script
+
+# The dir the script makes looks like this:
+# .
+# ├── settings.conf
+# ├── script.py
+# ├── Images import
+# │   ├── image_01.jpg
+# │   ├── image_02.jpg
+# │   ├── image_03.jpg
+# │   ├── image_04.jpg
+# │   └── image_5.jpg
+# └── Images export
+#     ├── TEAM1.jpg
+#     ├── TEAM2.jpg
+#     ├── TEAM3.jpg
+#     ├── TEAM4.jpg
+#     └── TEAM5.jpg
+
+
+
 import os
 import shutil
 import requests
