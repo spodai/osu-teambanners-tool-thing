@@ -99,7 +99,7 @@ def update_settings():
             clear_screen()
             break
         else:
-            input("Invalid option. Press Enter to continue...")
+            input("[ERROR] Invalid option. Press Enter to continue...")
             continue
 
         with open(CONFIG_FILE, 'w') as configfile:
@@ -108,41 +108,46 @@ def update_settings():
 
 
 def download_drive_folder(drive_id, download_path, csv_path):
-    while True:
-        clear_screen()
-        print("=== Download from Google Drive ===")
+    clear_screen()
+    print("=== Download from Google Drive ===")
 
-        url = f"https://drive.google.com/drive/folders/{drive_id}" if "drive.google.com" not in drive_id else drive_id
-        print(f"Downloading from {url}")
+    url = f"https://drive.google.com/drive/folders/{drive_id}" if "drive.google.com" not in drive_id else drive_id
+    print(f"Downloading from {url}")
 
-        os.makedirs(download_path, exist_ok=True)
-        existing_files_import = set(os.listdir(download_path))
-        uploaded_originals = read_uploaded_originals(csv_path)
-        downloaded_count = 0
-        skipped_count = 0
+    os.makedirs(download_path, exist_ok=True)
+    existing_files_import = set(os.listdir(download_path))
+    uploaded_originals = read_uploaded_originals(csv_path)
+    newly_downloaded = []
+    skipped_count = 0
 
-        try:
-            gdown.download_folder(url, output=download_path, quiet=False, use_cookies=False, remaining_ok=True)
-            # After attempting download, check what's in the folder
-            current_files_import = set(os.listdir(download_path))
-            for file in current_files_import:
-                if file not in existing_files_import and file not in uploaded_originals:
-                    downloaded_count += 1
-                elif file in existing_files_import:
-                    skipped_count += 1
-                elif file in uploaded_originals:
-                    skipped_count += 1 # Consider it skipped if already processed
+    try:
+        gdown.download_folder(url, output=download_path, quiet=True, use_cookies=False, remaining_ok=True)
+        current_files_import = set(os.listdir(download_path))
+        for file in current_files_import:
+            if file not in existing_files_import and file not in uploaded_originals:
+                newly_downloaded.append(file)
+            elif file in existing_files_import or file in uploaded_originals:
+                skipped_count += 1
 
-            print(f"\nDownload attempt complete.")
-            print(f"Potentially downloaded {downloaded_count} new files (check output above).")
-            print(f"Skipped {skipped_count} existing/processed files.")
+        print(f"\n[OK] Download attempt complete.")
+        if newly_downloaded:
+            print(f"Downloaded {len(newly_downloaded)} new files.")
+            print(f"Press Enter to rename the following new files:")
+            for file in newly_downloaded:
+                print(f"- {file}")
+            input()
+            clear_screen()
+            return newly_downloaded  # Return the list of new files
+        else:
+            print("[OK] No new files downloaded.")
+            # Don't prompt to return here, the renaming logic in start_script will handle it
+            return [] # Return an empty list
 
-        except Exception as e:
-            print(f"[ERROR] An error occurred during download: {e}")
-
+    except Exception as e:
+        print(f"[ERROR] An error occurred during download: {e}")
         input("\nPress Enter to return to the main menu...")
         clear_screen()
-        break
+        return [] # Return an empty list if an error occurred
 
 def read_uploaded_originals(csv_path):
     if not os.path.exists(csv_path):
@@ -152,7 +157,7 @@ def read_uploaded_originals(csv_path):
         next(reader, None)  # Skip the header row
         return {row[1] for row in reader}  # Collect original filenames
 
-def prompt_rename_images(import_path, export_path, uploaded_files, csv_path):
+def prompt_rename_images(import_path, export_path, uploaded_files, csv_path, new_files):
     os.makedirs(export_path, exist_ok=True)
     renamed = []
     existing_renamed = set()
@@ -162,18 +167,31 @@ def prompt_rename_images(import_path, export_path, uploaded_files, csv_path):
             for row in reader:
                 existing_renamed.add(row['Original'])
 
-    for file in os.listdir(import_path):
-        if file in uploaded_files or file in existing_renamed:
-            continue
-        src = os.path.join(import_path, file)
-        if not os.path.isfile(src):
-            continue
-        print(f"\nOriginal filename: {file}")
-        new_name = input("New name (no ext): ").strip()
-        ext = os.path.splitext(file)[1]
-        dest = os.path.join(export_path, new_name + ext)
-        shutil.copy(src, dest)
-        renamed.append((file, new_name + ext, dest))
+    files_to_rename = list(new_files) if new_files else [f for f in os.listdir(import_path) if f not in uploaded_files and f not in existing_renamed and os.path.isfile(os.path.join(import_path, f))]
+
+    if files_to_rename:
+        if new_files:
+            print("=== New filenames ===")
+        else:
+            print("=== Renaming Images ===")
+
+        for file in files_to_rename:
+            src = os.path.join(import_path, file)
+            if not os.path.isfile(src):
+                continue
+            print(f"\nOriginal filename: {file}")
+            new_name_base = input("New name (no ext, leave blank for original): ").strip()
+            _, ext = os.path.splitext(file)
+            if not new_name_base:
+                new_name = file
+            else:
+                new_name = new_name_base + ext
+            dest = os.path.join(export_path, new_name)
+            shutil.copy(src, dest)
+            renamed.append((file, new_name, dest))
+    else:
+        print("No new images to rename.")
+
     return renamed
 
 def upload_to_sul(file_path, api_key):
@@ -220,14 +238,14 @@ def show_csv(csv_path):
             clear_screen()
             break
         else:
-            print("Invalid choice. Press Enter to try again...")
+            print("[ERROR] Invalid choice. Press Enter to try again...")
             input()
 
 def rename_existing_item(csv_path, base_dir, config):
     while True:
         clear_screen()
         if not os.path.exists(csv_path):
-            print("CSV file not found.")
+            print("[ERROR] CSV file not found.")
             input("Press Enter to return to the main menu...")
             clear_screen()  # Clear screen before returning
             return
@@ -255,7 +273,7 @@ def rename_existing_item(csv_path, base_dir, config):
         try:
             item_number = int(choice) - 1
             if item_number < 0 or item_number >= len(reader):
-                print("Invalid choice.")
+                print("[ERROR] Invalid choice.")
                 input("Press Enter to try again...")
                 continue
         except ValueError:
@@ -286,11 +304,11 @@ def rename_existing_item(csv_path, base_dir, config):
                 os.rename(old_path, new_path)
                 renamed_success = True
             else:
-                print(f"File not found: {old_path}")
+                print(f"[ERROR] File not found: {old_path}")
                 input("Press Enter to continue...")
                 continue
         except Exception as e:
-            print(f"Failed to rename file: {e}")
+            print(f"[ERROR] Failed to rename file: {e}")
             input("Press Enter to continue...")
             continue
 
@@ -313,7 +331,7 @@ def rename_existing_item(csv_path, base_dir, config):
             elif reupload == 'n':
                 print("Skipping re-upload.")
             else:
-                print("Invalid choice. Skipping re-upload.")
+                print("[ERROR] Invalid choice. Skipping re-upload.")
 
             # Save back to CSV
             with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
@@ -329,9 +347,9 @@ def delete_entry(csv_path, base_dir):
     while True:
         clear_screen()
         print("=== Delete file ===")
-        print("[WARNING] This script cannot delete file using the s-ul API.")
+        print("[WARNING] Deleting items here only removes them locally and NOT on s-ul.eu.")
         if not os.path.exists(csv_path):
-            print("CSV file not found.")
+            print("[ERROR] CSV file not found.")
             input("Press Enter to return to the main menu...")
             clear_screen()  # Clear screen before returning
             return
@@ -340,7 +358,7 @@ def delete_entry(csv_path, base_dir):
             rows = list(csv.reader(f))
 
         if len(rows) <= 1:
-            print("No entries found in the CSV to delete.")
+            print("[ERROR] No entries found in the CSV to delete.")
             input("Press Enter to return to the main menu...")
             clear_screen()  # Clear screen before returning
             return
@@ -368,16 +386,16 @@ def delete_entry(csv_path, base_dir):
                             os.remove(path)
                             print(f"Deleted local file: {path}")
                         except Exception as e:
-                            print(f"Error deleting local file {path}: {e}")
+                            print(f"[ERROR] failed to delete local file {path}: {e}")
                 with open(csv_path, "w", newline='', encoding="utf-8") as f:
                     writer = csv.writer(f)
                     writer.writerows(rows)
                 input("Press Enter to continue deleting or enter 0 to go back...")
             else:
-                print("Invalid choice.")
+                print("[ERROR] Invalid choice.")
                 input("Press Enter to try again...")
         except ValueError:
-            print("Invalid input.")
+            print("[ERROR] Invalid input.")
             input("Press Enter to try again...")
 
 def start_script(config):
@@ -387,17 +405,28 @@ def start_script(config):
     csv_path = os.path.join(base_dir, "index.csv")
 
     os.makedirs(import_path, exist_ok=True)
-    download_drive_folder(config["drive_id"], import_path, csv_path)
+    newly_downloaded_files = download_drive_folder(config["drive_id"], import_path, csv_path)
     uploaded = read_uploaded_files(csv_path)
-    renamed = prompt_rename_images(import_path, export_path, uploaded, csv_path)
+    files_to_rename = list(newly_downloaded_files) + [
+        f for f in os.listdir(import_path)
+        if f not in uploaded and os.path.isfile(os.path.join(import_path, f))
+    ]
 
-    new_rows = []
-    for original, new_name, path in renamed:
-        url = upload_to_sul(path, config["api_key"])
-        new_rows.append((original, new_name, url))
-        print(f"Uploaded: {url}")
+    if files_to_rename:
+        renamed = prompt_rename_images(import_path, export_path, uploaded, csv_path, newly_downloaded_files)
 
-    write_to_csv(csv_path, new_rows)
+        new_rows = []
+        for original, new_name, path in renamed:
+            url = upload_to_sul(path, config["api_key"])
+            new_rows.append((original, new_name, url))
+            print(f"Uploaded: {url}")
+
+        write_to_csv(csv_path, new_rows)
+        input("\nPress Enter to return to the main menu...")
+        clear_screen()
+    else:
+        input("\nNo new files to download or rename. Press Enter to return to the main menu...")
+        clear_screen()
 
 def get_folder_tree_with_sizes(folder_path):
     tree_data = []
@@ -553,7 +582,7 @@ def menu():
             clear_screen()
             break
         else:
-            print("Invalid choice.")
+            print("[ERROR] Invalid choice.")
 
 if __name__ == "__main__":
     clear_screen()  # Clear the screen when the script starts
