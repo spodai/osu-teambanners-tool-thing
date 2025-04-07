@@ -210,7 +210,8 @@ def write_to_csv(csv_path, data):
         if write_header:
             writer.writerow(["Timestamp", "Original", "Renamed", "URL"])
         for row in data:
-            writer.writerow([datetime.now(), row[0], row[1], row[2]])
+            # Use the datetime class within the datetime module to get the current time
+            writer.writerow([datetime.datetime.now(), row[0], row[1], row[2]])
 
 def read_uploaded_files(csv_path):
     if not os.path.exists(csv_path):
@@ -342,7 +343,7 @@ def rename_existing_item(csv_path, base_dir, config):
                 writer.writerows(reader)
 
             print("[OK] File renamed and CSV updated.")
-            input("Press Enter to continue renaming or enter 0 to go back...")
+            input("Press Enter to continue renaming or enter and then 0 to go back...")
 
 def delete_entry(csv_path, base_dir):
     while True:
@@ -391,7 +392,7 @@ def delete_entry(csv_path, base_dir):
                 with open(csv_path, "w", newline='', encoding="utf-8") as f:
                     writer = csv.writer(f)
                     writer.writerows(rows)
-                input("Press Enter to continue deleting or enter 0 to go back...")
+                input("Press Enter to continue deleting or enter and then 0 to go back...")
             else:
                 print("[ERROR] Invalid choice.")
                 input("Press Enter to try again...")
