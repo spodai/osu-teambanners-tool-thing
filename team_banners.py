@@ -36,6 +36,7 @@ import requests
 import gdown
 import csv
 import configparser
+import shutil
 from datetime import datetime
 from tabulate import tabulate
 
@@ -482,6 +483,38 @@ def show_folder_structure(config):
         clear_screen()
         break
 
+def nuke_everything(base_dir):
+    clear_screen()
+    print("=== Nuke Everything ===")
+    print(f"[WARNING] This action will PERMANENTLY delete the following folder and all its contents:")
+    print(f"- Folder: {base_dir}")
+    print("\nTHIS ACTION IS IRREVERSIBLE. PROCEED WITH EXTREME CAUTION.")
+
+    confirmation = input("Are you absolutely sure you want to nuke EVERYTHING in the specified folder? Type 'NUKE' to confirm: ").strip()
+    if confirmation == 'NUKE':
+        confirmation2 = input("Last confirmation. Type 'I AM SURE' to proceed with deleting '{base_dir}': ").strip()
+        if confirmation2 == 'I AM SURE':
+            print("\nInitiating nuking sequence...")
+            try:
+                parent_dir = os.path.dirname(base_dir)
+                folder_to_delete = base_dir
+
+                if os.path.exists(folder_to_delete):
+                    shutil.rmtree(folder_to_delete)
+                    print(f"Deleted folder: {folder_to_delete}")
+                else:
+                    print(f"Folder not found: {folder_to_delete}")
+                print("\nNuking complete. The program's working folder and its contents have been deleted.")
+                exit()
+            except Exception as e:
+                print(f"\nAn error occurred during nuking: {e}")
+        else:
+            print("\nNuking aborted.")
+    else:
+        print("\nNuking aborted.")
+    input("\nPress Enter to return to the main menu...")
+    clear_screen()
+
 def show_explanation():
     clear_screen()
     print("=== How This Program Works ===")
@@ -536,7 +569,12 @@ def show_explanation():
     print("       ├── Removes a specific entry from the log file.")
     print("       └── Optionally deletes the corresponding local image files.")
 
-    print("7. Exit:")
+    print("7. Nuke Everything:")
+    print("   └── WARNING: Deletes all downloaded and exported images,")
+    print("       the CSV log, the configuration file, and the script's")
+    print("       containing folder. Use with extreme caution!")
+
+    print("8. Exit:")
     print("   └── Terminates the program.")
 
     print("\nFor the latest version and more information, visit the repository:")
@@ -559,7 +597,8 @@ def menu():
         print("4. Start script")
         print("5. Rename item")
         print("6. Delete item")
-        print("7. Exit")
+        print("7. Nuke Everything")
+        print("8. Exit")
 
         choice = input("> ").strip()
 
@@ -579,11 +618,14 @@ def menu():
         elif choice == "6":
             delete_entry(csv_path, base_dir)
         elif choice == "7":
+            nuke_everything(base_dir)
+        elif choice == "8":
             clear_screen()
             break
         else:
-            print("[ERROR] Invalid choice.")
+            print("Invalid choice.")
 
 if __name__ == "__main__":
-    clear_screen()  # Clear the screen when the script starts
+    clear_screen()
+    import datetime
     menu()
