@@ -411,51 +411,18 @@ def get_folder_tree_with_sizes(folder_path):
 
     def build_tree(directory, prefix=""):
         nonlocal total_size
-        base_name = os.path.basename(directory) if prefix else os.path.abspath(directory)
-        size_bytes = 0
-        if not prefix:
-            for item in os.listdir(directory):
-                item_path = os.path.join(directory, item)
-                size_bytes += get_size(item_path)
-
+        items = os.listdir(directory)
+        num_items = len(items)
+        for i, item in enumerate(items):
+            path = os.path.join(directory, item)
+            is_last = i == num_items - 1
+            indicator = "└── " if is_last else "├── "
+            size_bytes = get_size(path)
             size_readable = format_size(size_bytes)
-            tree_data.append((base_name, size_readable))
-            items = os.listdir(directory)
-            num_items = len(items)
-            for i, item in enumerate(items):
-                path = os.path.join(directory, item)
-                is_last = i == num_items - 1
-                indicator = "└── " if is_last else "├── "
-                build_tree_recursive(path, prefix + indicator)
-        else:
-            size_bytes = get_size(directory)
-            size_readable = format_size(size_bytes)
-            tree_data.append((prefix + base_name, size_readable))
-            if os.path.isdir(directory):
-                items = os.listdir(directory)
-                num_items = len(items)
-                for i, item in enumerate(items):
-                    path = os.path.join(directory, item)
-                    is_last = i == num_items - 1
-                    indicator = "    " if is_last else "│   "
-                    build_tree_recursive(path, prefix + indicator)
-
-    def build_tree_recursive(path, prefix):
-        nonlocal total_size
-        base_name = os.path.basename(path)
-        size_bytes = get_size(path)
-        size_readable = format_size(size_bytes)
-        tree_data.append((prefix + base_name, size_readable))
-        total_size += size_bytes
-        if os.path.isdir(path):
-            items = os.listdir(path)
-            num_items = len(items)
-            for i, item in enumerate(items):
-                item_path = os.path.join(path, item)
-                is_last = i == num_items - 1
-                indicator = "    " if is_last else "│   "
-                build_tree_recursive(item_path, prefix + indicator)
-
+            tree_data.append((prefix + indicator + item, size_readable))
+            total_size += size_bytes
+            if os.path.isdir(path):
+                build_tree(path, prefix + ("    " if is_last else "│   "))
 
     def format_size(bytes):
         if bytes == 0:
@@ -467,9 +434,10 @@ def get_folder_tree_with_sizes(folder_path):
             i += 1
         return f"{bytes:.2f} {units[i]}"
 
+    # Add the root directory with its total size first
+    root_size = sum(get_size(os.path.join(folder_path, item)) for item in os.listdir(folder_path))
+    tree_data.append((os.path.abspath(folder_path), format_size(root_size)))
     build_tree(folder_path)
-    total_size = sum(get_size(os.path.join(folder_path, item)) for item in os.listdir(folder_path))
-    tree_data.append(("Total Size:", format_size(total_size)))
     return tree_data
 
 def show_folder_structure(config):
