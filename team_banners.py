@@ -175,88 +175,104 @@ def show_csv(csv_path):
     print("\n" + tabulate(table[1:], headers=table[0], tablefmt="grid"))
 
 def rename_existing_item(csv_path, base_dir, config):
-    clear_screen()
-    if not os.path.exists(csv_path):
-        print("CSV file not found.")
-        return
-
-    with open(csv_path, 'r', newline='', encoding='utf-8') as csvfile:
-        reader = list(csv.DictReader(csvfile))
-
-    if not reader:
-        print("No entries found in the CSV.")
-        return
-
-    print("\n=== Existing Items ===")
-    for idx, row in enumerate(reader, start=1):
-        print(f"{idx}. {row['Renamed']} (Original: {row['Original']})")
-
-    try:
-        choice = int(input("\nEnter the number of the item you want to rename: ").strip()) - 1
-        if choice < 0 or choice >= len(reader):
-            print("Invalid choice.")
+    while True:  # Keep the rename menu active until the user chooses to exit
+        clear_screen()
+        if not os.path.exists(csv_path):
+            print("CSV file not found.")
+            input("Press Enter to return to the main menu...")
             return
-    except ValueError:
-        print("Please enter a valid number.")
-        return
 
-    selected_row = reader[choice]
-    old_name = selected_row['Renamed']
-    original_name = selected_row['Original']
-    old_url = selected_row['URL']
-    name_root, ext = os.path.splitext(old_name)
+        with open(csv_path, 'r', newline='', encoding='utf-8') as csvfile:
+            reader = list(csv.DictReader(csvfile))
 
-    new_name_input = input(f"Enter the new name for '{old_name}' (without extension): ").strip()
-    if not new_name_input:
-        print("Name cannot be empty.")
-        return
-
-    new_name = f"{new_name_input}{ext}"
-
-    old_path = os.path.join(base_dir, "Images export", old_name)
-    new_path = os.path.join(base_dir, "Images export", new_name)
-
-    renamed_success = False
-    try:
-        if os.path.exists(old_path):
-            os.rename(old_path, new_path)
-            renamed_success = True
-        else:
-            print(f"File not found: {old_path}")
+        if not reader:
+            print("No entries found in the CSV.")
+            input("Press Enter to return to the main menu...")
             return
-    except Exception as e:
-        print(f"Failed to rename file: {e}")
-        return
 
-    if renamed_success:
-        # Update the row
-        reader[choice]['Renamed'] = new_name
+        print("\n=== Existing Items ===")
+        for idx, row in enumerate(reader, start=1):
+            print(f"{idx}. {row['Renamed']} (Original: {row['Original']})")
 
-        print("[WARNING] First manually delete the already uploaded file before re-uploading! Else the original URL will return without changes to it's name.")
-        print("[WARNING] Uploaded files cannot be renamed in s-ul frontend.")
-        reupload = input("Do you want to re-upload this file? (y/n): ").strip().lower()
-        if reupload == 'y':
-            try:
-                url = upload_to_sul(new_path, config['api_key'])
-                reader[choice]['URL'] = url
-                print(f"[OK] File re-uploaded. New URL: {url}")
-            except requests.exceptions.RequestException as e:
-                print(f"[ERROR] re-upload failed: {e}")
-            except KeyError:
-                print("[ERROR] Could not retrieve upload URL.")
-        elif reupload == 'n':
-            print("Skipping re-upload.")
-        else:
-            print("Invalid choice. Skipping re-upload.")
+        print("\n0. Back to Main Menu")  # Option to exit the rename menu
 
-        # Save back to CSV
-        with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
-            fieldnames = reader[0].keys()
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(reader)
+        choice = input("\nEnter the number of the item you want to rename: ").strip()
 
-        print("[OK] File renamed and CSV updated.")
+        if choice == '0':
+            break  # Exit the rename menu loop
+
+        try:
+            item_number = int(choice) - 1
+            if item_number < 0 or item_number >= len(reader):
+                print("Invalid choice.")
+                input("Press Enter to try again...")
+                continue
+        except ValueError:
+            print("Please enter a valid number.")
+            input("Press Enter to try again...")
+            continue
+
+        selected_row = reader[item_number]
+        old_name = selected_row['Renamed']
+        original_name = selected_row['Original']
+        old_url = selected_row['URL']
+        _, ext = os.path.splitext(old_name)
+
+        new_name_input = input(f"Enter the new name for '{old_name}' (without extension): ").strip()
+        if not new_name_input:
+            print("Name cannot be empty.")
+            input("Press Enter to try again...")
+            continue
+
+        new_name = f"{new_name_input}{ext}"
+
+        old_path = os.path.join(base_dir, "Images export", old_name)
+        new_path = os.path.join(base_dir, "Images export", new_name)
+
+        renamed_success = False
+        try:
+            if os.path.exists(old_path):
+                os.rename(old_path, new_path)
+                renamed_success = True
+            else:
+                print(f"File not found: {old_path}")
+                input("Press Enter to continue...")
+                continue
+        except Exception as e:
+            print(f"Failed to rename file: {e}")
+            input("Press Enter to continue...")
+            continue
+
+        if renamed_success:
+            # Update the row
+            reader[item_number]['Renamed'] = new_name
+
+            print("[WARNING] First manually delete the already uploaded file before re-uploading! Else the original URL will return without changes to it's name.")
+            print("[WARNING] Uploaded files cannot be renamed in s-ul frontend.")
+            reupload = input("Do you want to re-upload this file? (y/n): ").strip().lower()
+            if reupload == 'y':
+                try:
+                    url = upload_to_sul(new_path, config['api_key'])
+                    reader[item_number]['URL'] = url
+                    print(f"[OK] File re-uploaded. New URL: {url}")
+                except requests.exceptions.RequestException as e:
+                    print(f"[ERROR] re-upload failed: {e}")
+                except KeyError:
+                    print("[ERROR] Could not retrieve upload URL.")
+            elif reupload == 'n':
+                print("Skipping re-upload.")
+            else:
+                print("Invalid choice. Skipping re-upload.")
+
+            # Save back to CSV
+            with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = reader[0].keys()
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(reader)
+
+            print("[OK] File renamed and CSV updated.")
+            input("Press Enter to continue renaming, then 0 to go back to the main menu...") # Keep the menu active
 
 def delete_entry(csv_path, base_dir):
     clear_screen()
