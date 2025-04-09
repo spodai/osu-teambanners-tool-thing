@@ -380,13 +380,13 @@ def delete_entry(csv_path, base_dir):
             i = int(choice)
             if 1 <= i < len(rows):
                 removed = rows.pop(i)
-                print(f"Removed: {removed[2]} from the CSV.")
+                print(f"[OK] Removed: {removed[2]} from the CSV.")
                 for folder in ["Images import", "Images export"]:
                     path = os.path.join(base_dir, folder, removed[2])
                     if os.path.exists(path):
                         try:
                             os.remove(path)
-                            print(f"Deleted local file: {path}")
+                            print(f"[OK] Deleted local file: {path}")
                         except Exception as e:
                             print(f"[ERROR] failed to delete local file {path}: {e}")
                 with open(csv_path, "w", newline='', encoding="utf-8") as f:
