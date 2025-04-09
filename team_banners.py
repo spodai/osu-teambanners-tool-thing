@@ -489,12 +489,11 @@ def nuke_everything(base_dir):
     print("=== Nuke Everything ===")
     print(f"[WARNING] This action will PERMANENTLY delete the following folder and all its contents:")
     print(f"- Folder: {base_dir}")
-    print("\nTHIS ACTION IS IRREVERSIBLE. PROCEED WITH EXTREME CAUTION.")
 
-    confirmation = input("Are you absolutely sure you want to nuke EVERYTHING in the specified folder? Type 'NUKE' to confirm: ").strip()
-    if confirmation == 'NUKE':
-        confirmation2 = input("Last confirmation. Type 'I AM SURE' to proceed with deleting '{base_dir}': ").strip()
-        if confirmation2 == 'I AM SURE':
+    confirmation = input("Are you sure? Type 'yes' to confirm: ").strip()
+    if confirmation == 'yes':
+        confirmation2 = input("Type 'yes' again to to proceed with deleting '{base_dir}': ").strip()
+        if confirmation2 == 'yes':
             print("\nInitiating nuking sequence...")
             try:
                 parent_dir = os.path.dirname(base_dir)
@@ -508,11 +507,11 @@ def nuke_everything(base_dir):
                 print("\nNuking complete. The program's working folder and its contents have been deleted.")
                 exit()
             except Exception as e:
-                print(f"\nAn error occurred during nuking: {e}")
+                print(f"\nP[ERROR] Nuking has failed: {e}")
         else:
             print("\nNuking aborted.")
     else:
-        print("\nNuking aborted.")
+        print("\n Nuking aborted.")
     input("\nPress Enter to return to the main menu...")
     clear_screen()
 
@@ -568,12 +567,12 @@ def show_explanation():
     print("6. Delete item:")
     print("   └── 'index.csv' Management:")
     print("       ├── Removes a specific entry from the log file.")
-    print("       └── Optionally deletes the corresponding local image files.")
+    print("       └── Deletes the corresponding local image files (Import and Export folders).")
 
-    print("7. Nuke Everything:")
+    print("7. Nuke:")
     print("   └── WARNING: Deletes all downloaded and exported images,")
     print("       the CSV log, the configuration file, and the script's")
-    print("       containing folder. Use with extreme caution!")
+    print("       containing folder. Has double conformation.")
 
     print("8. Exit:")
     print("   └── Terminates the program.")
@@ -598,7 +597,7 @@ def menu():
         print("4. Start script")
         print("5. Rename item")
         print("6. Delete item")
-        print("7. Nuke Everything")
+        print("7. Nuke")
         print("8. Exit")
 
         choice = input("> ").strip()
