@@ -331,7 +331,7 @@ def rename_existing_item(csv_path, base_dir, config):
                 except KeyError:
                     print("[ERROR] Could not retrieve upload URL.")
             elif reupload == 'n':
-                print("Skipping re-upload.")
+                print("[OK] Skipping re-upload.")
             else:
                 print("[ERROR] Invalid choice. Skipping re-upload.")
 
