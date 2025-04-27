@@ -101,31 +101,25 @@ def setup_file_logging(base_dir, enable_logging):
         if isinstance(handler, logging.FileHandler):
             file_handler = handler
             logger.removeHandler(handler)
-            handler.close()
+            handler.close() # Ensure it's closed before removing
             break # Assume only one file handler
 
     if str(enable_logging).lower() == 'true':
-        if file_handler:
-            logger.info("File logging already configured (handler removed and re-added).")
-        else:
-            logger.info("Configuring file logging.")
-        # Create and add the file handler
+        # Create and add the file handler only if logging is enabled
         fh = logging.FileHandler(log_file_path, encoding='utf-8')
         fh.setLevel(logging.INFO)
         formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
         fh.setFormatter(formatter)
         logger.addHandler(fh)
+        # Log enabling message *after* adding the handler
         logger.info(f"File logging enabled. Log file: {log_file_path}")
     else:
+        # Log disabling message *before* potentially removing the handler (if it existed)
         if file_handler:
             logger.info("File logging disabled and handler removed.")
         else:
-            # Log only if NullHandler is the only one left
-            if len(logger.handlers) == 1 and isinstance(logger.handlers[0], logging.NullHandler):
-                 # This message won't go anywhere unless another handler is added later
-                 logger.info("File logging is disabled. No file handler configured.")
-            elif len(logger.handlers) > 1:
-                 logger.info("File logging disabled.")
+            # This message won't go to file if logging was already disabled
+            logger.info("File logging is disabled. No file handler configured.")
 
 
 def apply_color_settings(enable_colors):
@@ -143,7 +137,11 @@ def apply_color_settings(enable_colors):
         C_MAGENTA = _COLOR_CODE_MAGENTA
         # Initialize colorama if available and colors enabled
         if colorama:
-            colorama.init(autoreset=True)
+            try:
+                colorama.init(autoreset=True)
+            except Exception as e:
+                # Non-critical error, proceed without colorama
+                print(f"Warning: Failed to initialize colorama: {e}")
     else:
         C_RESET = ""
         C_RED = ""
@@ -154,7 +152,11 @@ def apply_color_settings(enable_colors):
         C_MAGENTA = ""
         # Deinitialize colorama if colors are disabled
         if colorama:
-            colorama.deinit()
+            try:
+                colorama.deinit()
+            except Exception as e:
+                 # Non-critical error
+                print(f"Warning: Failed to deinitialize colorama: {e}")
 
 # --- Utility Functions ---
 
@@ -199,16 +201,19 @@ def print_info(message):
 def get_yes_no_input(prompt):
     """Gets a 'y' or 'n' input from the user."""
     while True:
-        choice = input(f"{prompt} ({C_GREEN}y{C_RESET}/{C_RED}n{C_RESET}): ").strip().lower()
+        # Use temporary colors for this prompt as global settings might not be applied yet
+        choice = input(f"{prompt} ({_COLOR_CODE_GREEN}y{_COLOR_CODE_RESET}/{_COLOR_CODE_RED}n{_COLOR_CODE_RESET}): ").strip().lower()
         if choice in ['y', 'n']:
             return choice == 'y'
         else:
-            print_error("Invalid input. Please enter 'y' or 'n'.") # Error not logged
+            # Use temporary color for error
+            print(f"{_COLOR_CODE_RED}[ERROR] Invalid input. Please enter 'y' or 'n'.{_COLOR_CODE_RESET}")
 
 def init_config():
     """Initializes the configuration file if it doesn't exist."""
     if not os.path.exists(CONFIG_FILE):
-        print_info("Config file not found. Let's set it up.")
+        # Use temporary colors before settings are loaded/applied
+        print(f"{_COLOR_CODE_CYAN}[INFO] Config file not found. Let's set it up.{_COLOR_CODE_RESET}")
         drive_id = input("Enter Google Drive folder ID or URL: ").strip()
         api_key = input("Enter s-ul.eu API key: ").strip()
         # Ask for color and logging preferences
@@ -220,7 +225,8 @@ def init_config():
 
         # Apply settings immediately for feedback during setup
         apply_color_settings(enable_colors)
-        setup_file_logging(base_dir, enable_logging) # Setup logging based on choice
+        # Setup logging based on choice *before* trying to log
+        setup_file_logging(base_dir, enable_logging)
 
         logger.info("Attempting to initialize configuration file.")
 
@@ -236,7 +242,7 @@ def init_config():
         try:
             with open(CONFIG_FILE, 'w', encoding='utf-8') as configfile:
                 config.write(configfile)
-            print_success("Config saved.")
+            print_success("Config saved.") # Uses applied color settings
             logger.info(f"Config file '{CONFIG_FILE}' created and saved successfully.")
             # Create necessary folders after saving config
             os.makedirs(os.path.join(base_dir, IMPORT_FOLDER), exist_ok=True)
@@ -246,20 +252,21 @@ def init_config():
             pause()
         except IOError as e:
             message = f"Could not write config file: {e}"
-            print_error(message, log_exception=True)
+            print_error(message, log_exception=True) # Uses applied color settings
             logger.critical(f"CRITICAL: Failed to initialize config file '{CONFIG_FILE}'. Exiting.")
             sys.exit(1) # Exit if config cannot be saved initially
         except Exception as e: # Catch potential logging setup errors
             message = f"An error occurred during initial setup: {e}"
-            print_error(message, log_exception=True)
+            print_error(message, log_exception=True) # Uses applied color settings
             logger.critical(f"CRITICAL: Failed during initial setup: {e}", exc_info=True)
             sys.exit(1)
 
 def load_config():
     """Loads configuration from the file, handling defaults for new settings."""
     if not os.path.exists(CONFIG_FILE):
-        print_error(f"Configuration file '{CONFIG_FILE}' not found.")
-        print_info("Please run the script again to initialize the configuration.")
+        # Use temporary colors as settings aren't loaded yet
+        print(f"{_COLOR_CODE_RED}[ERROR] Configuration file '{CONFIG_FILE}' not found.{_COLOR_CODE_RESET}")
+        print(f"{_COLOR_CODE_CYAN}[INFO] Please run the script again to initialize the configuration.{_COLOR_CODE_RESET}")
         sys.exit(1)
 
     config = configparser.ConfigParser()
@@ -275,8 +282,8 @@ def load_config():
         # Check for essential keys first
         required_keys = ['drive_id', 'api_key', 'base_dir']
         for key in required_keys:
-            if key not in config['DEFAULT']:
-                raise configparser.Error(f"Missing essential key '{key}' in config.")
+            if key not in config['DEFAULT'] or not config['DEFAULT'][key]: # Check if key exists and is not empty
+                raise configparser.Error(f"Missing or empty essential key '{key}' in config.")
 
         base_dir_from_config = config['DEFAULT']['base_dir']
 
@@ -284,7 +291,7 @@ def load_config():
         enable_colors = config['DEFAULT'].get('enable_colors', 'true').lower()
         enable_logging = config['DEFAULT'].get('enable_logging', 'true').lower()
 
-        # Apply settings based on loaded/defaulted values
+        # Apply settings based on loaded/defaulted values *before* logging/printing
         apply_color_settings(enable_colors)
         # Setup logging using the loaded base_dir and enable_logging flag
         setup_file_logging(base_dir_from_config, enable_logging)
@@ -298,7 +305,6 @@ def load_config():
 
         logger.info("Configuration loaded successfully.")
         # Return the full dictionary including the potentially defaulted color/log settings
-        # Ensure the returned dict reflects the actual state
         loaded_config = dict(config['DEFAULT'])
         loaded_config['enable_colors'] = enable_colors
         loaded_config['enable_logging'] = enable_logging
@@ -306,20 +312,24 @@ def load_config():
 
     except (configparser.Error, IOError) as e:
         message = f"Failed to load or parse configuration file: {e}"
-        # Try to apply basic color settings for the error message
         apply_color_settings('true') # Assume colors OK for critical error
         print_error(message)
         # Attempt to log critical failure
-        if base_dir_from_config:
-             # Try setting up basic file logging for the critical error
-             setup_file_logging(base_dir_from_config, 'true')
-        logger.critical(f"CRITICAL: Failed to load configuration: {e}", exc_info=True)
+        try:
+            if base_dir_from_config:
+                 setup_file_logging(base_dir_from_config, 'true')
+            logger.critical(f"CRITICAL: Failed to load configuration: {e}", exc_info=True)
+        except Exception as log_e:
+             print(f"Additionally, failed to log critical error: {log_e}") # Print logging error if it occurs
         sys.exit(1)
     except Exception as e: # Catch other unexpected errors
         message = f"An unexpected error occurred loading configuration: {e}"
         apply_color_settings('true') # Assume colors OK for critical error
         print_error(message)
-        logger.critical(f"CRITICAL: Unexpected error loading config: {e}", exc_info=True)
+        try:
+            logger.critical(f"CRITICAL: Unexpected error loading config: {e}", exc_info=True)
+        except Exception as log_e:
+             print(f"Additionally, failed to log critical error: {log_e}")
         sys.exit(1)
 
 
@@ -341,6 +351,9 @@ def update_settings():
         try:
             # Read config fresh each time to show current values
             config_proxy.read(CONFIG_FILE, encoding='utf-8')
+            # Ensure DEFAULT section exists after read
+            if 'DEFAULT' not in config_proxy:
+                raise configparser.Error("Config file is missing [DEFAULT] section.")
             current = config_proxy['DEFAULT']
             current_drive_id = current.get('drive_id', 'Not Set')
             current_api_key = current.get('api_key', 'Not Set')
@@ -450,10 +463,12 @@ def update_settings():
                 if choice not in ['4', '5']:
                     print_success("Setting updated!")
                 logger.info(f"Setting '{setting_key}' updated from '{old_value}' to '{new_value}'. Config saved.")
-                # If base_dir changed, logging was already handled during the toggle logic for choice 3
+                # If base_dir changed, re-setup logging for the new path
                 if setting_key == 'base_dir' and old_value != new_value:
                      logger.info("Base directory changed, re-initializing logger.")
-                     setup_file_logging(new_value, config_proxy['DEFAULT'].get('enable_logging', 'true'))
+                     # Get the current logging state before setting up for new dir
+                     current_logging_state = config_proxy['DEFAULT'].get('enable_logging', 'true')
+                     setup_file_logging(new_value, current_logging_state)
 
                 # Pause only if it wasn't a toggle that already paused
                 if choice not in ['4', '5']:
@@ -472,22 +487,19 @@ def update_settings():
 
 # --- Core Functionality ---
 
-# (read_uploaded_originals, download_drive_folder, prompt_rename_images, upload_to_sul, write_to_csv remain largely the same, relying on logger)
-# Minor adjustments made previously to use logger correctly are kept.
-
 def read_uploaded_originals(csv_path):
     """Reads original filenames (column 2) from the CSV log."""
     originals = set()
     if not os.path.exists(csv_path):
         logger.info(f"CSV file '{csv_path}' not found. Assuming no previously uploaded files.")
-        return originals # Return empty set
+        return originals
 
     logger.info(f"Reading previously uploaded original filenames from '{csv_path}'.")
     try:
         with open(csv_path, 'r', newline='', encoding="utf-8") as f:
             reader = csv.reader(f)
-            header = next(reader, None) # Skip header
-            original_col_index = 1 # Assuming 'Original' is the second column
+            header = next(reader, None)
+            original_col_index = 1
 
             if not header:
                 logger.warning(f"CSV file '{csv_path}' is empty or has no header.")
@@ -495,7 +507,7 @@ def read_uploaded_originals(csv_path):
 
             if len(header) <= original_col_index:
                  logger.warning(f"CSV file '{csv_path}' header does not have expected 'Original' column at index {original_col_index}.")
-                 return originals # Cannot proceed if header is wrong
+                 return originals
 
             processed_rows = 0
             malformed_rows = 0
@@ -513,22 +525,18 @@ def read_uploaded_originals(csv_path):
         print_error(f"Could not read CSV file '{csv_path}': {e}", log_exception=True)
     except StopIteration:
         logger.info(f"CSV file '{csv_path}' contains only a header.")
-        pass # Handles empty file after header check
+        pass
 
     return originals
 
 def download_drive_folder(drive_id, download_path, csv_path):
-    """
-    Downloads files from Google Drive folder using gdown.
-    Filters the downloaded files to identify only those not already logged in the CSV.
-    """
+    """Downloads files from Google Drive folder using gdown and filters against CSV."""
     clear_screen()
     print_title("Download from Google Drive")
     logger.info("Starting Google Drive download process.")
 
     if not drive_id:
         print_error("Google Drive ID/URL is not set in configuration.")
-        # Error logged by print_error
         pause()
         return []
 
@@ -539,35 +547,27 @@ def download_drive_folder(drive_id, download_path, csv_path):
     logger.info(f"Download path: {download_path}")
 
     os.makedirs(download_path, exist_ok=True)
-
-    # Get list of files already logged in the CSV
     uploaded_originals = read_uploaded_originals(csv_path)
     logger.info(f"Found {len(uploaded_originals)} files previously logged in CSV.")
-
-    # Get list of files currently present in the import directory *before* download
     files_before_download = {f for f in os.listdir(download_path) if os.path.isfile(os.path.join(download_path, f))}
     logger.info(f"Found {len(files_before_download)} files in import directory before download.")
-
-    files_to_process = [] # Files identified as needing rename/upload
+    files_to_process = []
 
     try:
-        # --- Call gdown to download/update the folder ---
         print_info("Starting gdown download/sync (this might take a while)...")
         logger.info(f"Calling gdown.download_folder for URL: {url}")
         gdown.download_folder(url, output=download_path, quiet=False, use_cookies=False, remaining_ok=True)
         logger.info("gdown.download_folder process finished.")
         print_info("gdown download/sync process finished.")
 
-        # --- Filter downloaded files ---
         files_after_download = {f for f in os.listdir(download_path) if os.path.isfile(os.path.join(download_path, f))}
         logger.info(f"Found {len(files_after_download)} files in import directory after download.")
-
         processed_count = 0
         skipped_logged_count = 0
 
         print_info("Filtering downloaded files...")
         logger.info("Filtering downloaded files against CSV log...")
-        for file in sorted(list(files_after_download)): # Sort for predictable processing order
+        for file in sorted(list(files_after_download)):
             if file not in uploaded_originals:
                 files_to_process.append(file)
                 if file not in files_before_download:
@@ -610,15 +610,14 @@ def prompt_rename_images(import_path, export_path, files_to_process):
     print_title("Rename New Files")
     logger.info(f"Starting rename process for {len(files_to_process)} file(s).")
     os.makedirs(export_path, exist_ok=True)
-    renamed_list = [] # List of tuples: (original_name, new_name, export_file_path)
+    renamed_list = []
+    skipped_count = 0
+    renamed_count = 0
 
     print_info(f"Found {len(files_to_process)} file(s) to rename.")
     print_info("Enter a new name without the extension.")
     print_info("Leave blank and press Enter to keep the original filename.")
 
-    skipped_count = 0
-    renamed_count = 0
-    # Sort files for consistent processing order
     for original_filename in sorted(files_to_process):
         src_path = os.path.join(import_path, original_filename)
         if not os.path.isfile(src_path):
@@ -635,7 +634,6 @@ def prompt_rename_images(import_path, export_path, files_to_process):
         dest_path = os.path.join(export_path, new_filename)
         logger.info(f"Processing rename for '{original_filename}' -> '{new_filename}'.")
 
-        # Handle potential filename conflicts in export directory
         counter = 1
         while os.path.exists(dest_path) and dest_path != src_path:
             print_warning(f"File '{new_filename}' already exists in export folder.")
@@ -644,7 +642,7 @@ def prompt_rename_images(import_path, export_path, files_to_process):
             if overwrite_choice == 'y':
                 print_info(f"Overwriting existing file: {new_filename}")
                 logger.info(f"User chose to overwrite existing file '{new_filename}'.")
-                break # Proceed with overwriting
+                break
             else:
                  base = new_name_base if new_name_base else os.path.splitext(original_filename)[0]
                  new_filename = f"{base}_{counter}{ext}"
@@ -652,19 +650,18 @@ def prompt_rename_images(import_path, export_path, files_to_process):
                  print_info(f"Trying new name: {new_filename}")
                  logger.info(f"Rename conflict: Trying new name '{new_filename}'.")
                  counter += 1
-                 if counter > 10: # Safety break
+                 if counter > 10:
                       print_error("Too many filename conflicts, skipping this file.")
                       logger.error(f"Rename skipped: Too many filename conflicts for '{original_filename}'.")
-                      new_filename = None # Signal to skip
+                      new_filename = None
                       break
 
-        if new_filename is None: # Skipped due to conflicts
+        if new_filename is None:
              skipped_count += 1
              continue
 
-        # Copy file to export directory
         try:
-            shutil.copy2(src_path, dest_path) # copy2 preserves metadata
+            shutil.copy2(src_path, dest_path)
             print_success(f"Copied and renamed to: {new_filename}")
             logger.info(f"Successfully copied '{src_path}' to '{dest_path}'.")
             renamed_list.append((original_filename, new_filename, dest_path))
@@ -672,7 +669,7 @@ def prompt_rename_images(import_path, export_path, files_to_process):
         except IOError as e:
             print_error(f"Could not copy file '{original_filename}' to '{dest_path}': {e}", log_exception=True)
             skipped_count += 1
-        except Exception as e: # Catch other potential errors like permissions
+        except Exception as e:
             print_error(f"An unexpected error occurred during copy: {e}", log_exception=True)
             skipped_count += 1
 
@@ -682,19 +679,19 @@ def prompt_rename_images(import_path, export_path, files_to_process):
 
 def upload_to_sul(file_path, api_key):
     """Uploads a file to s-ul.eu and returns the URL."""
-    filename = os.path.basename(file_path) # For logging/errors
+    filename = os.path.basename(file_path)
     if not api_key:
         logger.error(f"Upload skipped for '{filename}': API key is missing.")
-        raise ValueError("S-UL API key is missing.") # Let caller handle
+        raise ValueError("S-UL API key is missing.")
     if not os.path.exists(file_path):
          logger.error(f"Upload skipped for '{filename}': File not found at '{file_path}'.")
-         raise FileNotFoundError(f"File to upload not found: {file_path}") # Let caller handle
+         raise FileNotFoundError(f"File to upload not found: {file_path}")
 
     print_info(f"Uploading '{filename}' to s-ul.eu...")
     logger.info(f"Attempting upload for '{filename}' from '{file_path}'.")
     try:
         with open(file_path, "rb") as f:
-            files = {"file": (filename, f)} # Explicitly set filename in multipart
+            files = {"file": (filename, f)}
             data = {"wizard": "true", "key": str(api_key)}
             res = requests.post("https://s-ul.eu/api/v1/upload", data=data, files=files, timeout=60)
 
@@ -766,21 +763,11 @@ def write_to_csv(csv_path, upload_data):
 
 def strip_ansi_codes(text):
     """Removes ANSI escape codes from a string."""
-    # Use the compiled regex for efficiency if called often
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
     return ansi_escape.sub('', text)
 
 def get_csv_data(csv_path, add_color=False):
-    """
-    Reads all data from the CSV file. Validates row length.
-    Args:
-        csv_path (str): Path to the CSV file.
-        add_color (bool): If True, adds color codes to the returned header.
-    Returns:
-        tuple: (header_list or None, data_list_of_lists)
-               Header is colored if add_color is True.
-               Returns (None, []) on error or if file not found/empty.
-    """
+    """Reads all data from the CSV file. Validates row length."""
     if not os.path.exists(csv_path):
         return None, []
 
@@ -809,7 +796,6 @@ def get_csv_data(csv_path, add_color=False):
 
             logger.debug(f"Read {len(validated_data)} valid data rows from CSV.")
 
-            # Use global color vars (C_CYAN, C_RESET) which are set based on config
             if add_color:
                 colored_header = [f"{C_CYAN}{h}{C_RESET}" for h in header]
                 return colored_header, validated_data
@@ -1253,7 +1239,6 @@ def get_folder_tree_with_sizes(folder_path):
                 logger.warning(f"Cannot access item type '{path}': {e}")
 
             if is_dir:
-                # Use global color var C_BLUE
                 item_display = f"{C_BLUE}{item}{C_RESET}"
                 size_readable = "<DIR>"
                 tree_data.append((prefix + indicator + item_display, size_readable))
@@ -1275,7 +1260,6 @@ def get_folder_tree_with_sizes(folder_path):
          logger.error(f"Could not traverse directory '{folder_path}' for size calculation: {e}")
          root_total_bytes = -1
 
-    # Use global color var C_BLUE
     root_display_name = f"{C_BLUE}{os.path.basename(folder_path)}{C_RESET}"
     tree_data.append((root_display_name, format_size(root_total_bytes)))
     build_tree(folder_path)
@@ -1297,7 +1281,6 @@ def show_folder_structure(config):
     print_title(f"Folder Structure ({abs_base_dir})")
     try:
         folder_tree = get_folder_tree_with_sizes(base_dir)
-        # Use global color vars C_CYAN, C_RESET
         headers = [f"{C_CYAN}Name{C_RESET}", f"{C_CYAN}Size{C_RESET}"]
         print(tabulate(folder_tree, headers=headers, tablefmt="plain"))
     except Exception as e:
@@ -1311,12 +1294,10 @@ def nuke_everything(base_dir):
     clear_screen()
     print_title("Nuke Everything")
     logger.warning("NUKE EVERYTHING option selected.")
-    # Use global color var C_RED
     print(f"{C_RED}=== WARNING: DESTRUCTIVE ACTION ==={C_RESET}")
     print_warning("This action will PERMANENTLY delete the script's")
     print_warning(f"working folder and ALL its contents:")
     abs_base_dir = os.path.abspath(base_dir)
-    # Use global color var C_YELLOW
     print(f"\nFolder to be deleted: {C_YELLOW}{abs_base_dir}{C_RESET}\n")
     logger.warning(f"Target folder for nuke: {abs_base_dir}")
 
@@ -1325,7 +1306,6 @@ def nuke_everything(base_dir):
         pause()
         return
 
-    # Use global color vars
     confirm1 = input(f"Are you ABSOLUTELY sure? Type '{C_YELLOW}yes{C_RESET}' to confirm: ").strip().lower()
     if confirm1 == 'yes':
         logger.info("Nuke first confirmation successful.")
@@ -1334,17 +1314,46 @@ def nuke_everything(base_dir):
         if confirm2 == 'yes':
             logger.warning(f"NUKE SECOND CONFIRMATION SUCCESSFUL. Proceeding with deletion of '{abs_base_dir}'.")
             print(f"\n{C_RED}[NUKE INITIATED]{C_RESET} Deleting folder '{abs_base_dir}'...")
+
+            # --- FIX: Close log handler BEFORE deleting ---
+            log_handler_closed = False
+            for handler in logger.handlers[:]:
+                if isinstance(handler, logging.FileHandler):
+                    try:
+                        handler.close()
+                        logger.removeHandler(handler)
+                        log_handler_closed = True
+                        logger.info("Closed log file handler before nuke.")
+                        break # Assume only one file handler
+                    except Exception as log_close_e:
+                        logger.error(f"Error closing log handler before nuke: {log_close_e}")
+                        # Proceed with nuke attempt anyway? Or abort? Let's proceed.
+                        print_warning(f"Could not close log file handle: {log_close_e}. Nuke might still fail.")
+
+            if not log_handler_closed:
+                 logger.warning("No active file handler found to close before nuke.")
+            # --- End FIX ---
+
             try:
                 shutil.rmtree(abs_base_dir)
-                print_success(f"Successfully deleted folder: {abs_base_dir}")
-                logger.warning(f"NUKE SUCCESSFUL: Deleted folder '{abs_base_dir}'. Exiting program.")
-                print_info("Exiting program as its working directory is gone.")
+                # If successful, logging won't work anymore, just print
+                print(f"{C_GREEN}[OK] Successfully deleted folder: {abs_base_dir}{C_RESET}")
+                print(f"{C_CYAN}[INFO] Exiting program as its working directory is gone.{C_RESET}")
                 pause("Press Enter to exit.")
                 sys.exit(0)
             except Exception as e:
-                print_error(f"Nuking FAILED: {e}", log_exception=True)
-                print_info("Some files or folders might still remain.")
+                # Try to log the failure if logging was re-enabled somehow, otherwise just print
+                print_error(f"Nuking FAILED: {e}") # Prints and tries to log
                 logger.critical(f"NUKE FAILED for '{abs_base_dir}': {e}", exc_info=True)
+                print_info("Some files or folders might still remain.")
+                # Attempt to re-establish logging if it was closed
+                try:
+                    config = load_config() # Reload to get logging state
+                    setup_file_logging(abs_base_dir, config.get('enable_logging', 'true'))
+                    logger.info("Attempted to re-establish logging after failed nuke.")
+                except Exception as post_nuke_log_e:
+                    print_warning(f"Could not re-establish logging after failed nuke: {post_nuke_log_e}")
+
         else:
             print_info("Nuking aborted (second confirmation was not 'yes').")
             logger.info("Nuke aborted by user (second confirmation failed).")
@@ -1363,7 +1372,6 @@ def show_explanation():
     print("This tool automates fetching, renaming, and uploading images to s-ul.eu.")
     print("It keeps track of processed files in 'index.csv'.\n")
 
-    # Use global color vars
     explanation = [
         (f"{C_YELLOW}0{C_RESET}. How this works", "Displays this explanation."),
         (f"{C_YELLOW}1{C_RESET}. Show CSV data", "Shows the log of processed files ('index.csv')."),
@@ -1395,27 +1403,24 @@ def show_explanation():
 
 def menu():
     """Displays the main menu and handles user choices."""
-    init_config() # Ensures config exists, applies initial settings
-    config = load_config() # Loads config, applies saved/default settings
+    init_config()
+    config = load_config()
     logger.info("="*30 + " Script Execution Started " + "="*30)
 
     while True:
         clear_screen()
         try:
-             # Reload config to reflect potential changes from update_settings
              config = load_config()
              base_dir = config.get("base_dir", "Not Set")
              csv_path = os.path.join(base_dir, CSV_FILENAME) if base_dir != "Not Set" else None
              logger.debug("Main menu loop started. Config reloaded.")
         except SystemExit:
-             return # Exit if config loading fails critically
+             return
 
         print_title("Main Menu")
-        # Use global color var C_YELLOW
         print(f"Base Directory: {C_YELLOW}{base_dir}{C_RESET}")
         print("-" * (len("Base Directory: ") + len(str(base_dir))))
 
-        # Use global color vars
         print(f"{C_YELLOW}0{C_RESET}. How this program works")
         print(f"{C_YELLOW}1{C_RESET}. Show CSV data")
         print(f"{C_YELLOW}2{C_RESET}. Show folder structure")
@@ -1427,7 +1432,6 @@ def menu():
         print(f"{C_YELLOW}8{C_RESET}. Exit")
 
         choice = input(f"\nEnter your choice ({C_YELLOW}0-8{C_RESET}): ").strip()
-        # Log choice using clean string
         logger.info(f"User chose main menu option: {strip_ansi_codes(choice)}")
 
         if choice == "0":
@@ -1442,8 +1446,6 @@ def menu():
             show_folder_structure(config)
         elif choice == "3":
             update_settings()
-            # Config is reloaded at the start of the next loop iteration
-            # Color/logging settings are applied by load_config
         elif choice == "4":
             start_script(config)
         elif choice == "5":
@@ -1480,29 +1482,33 @@ if __name__ == "__main__":
         menu()
     except KeyboardInterrupt:
         clear_screen()
-        # Use global color vars
         print(f"{C_CYAN}\nOperation cancelled by user. Exiting.{C_RESET}")
-        # Logger might not be fully configured if cancelled early, but try logging
         try:
             logger.warning("Operation cancelled by user (KeyboardInterrupt).")
         except Exception:
-            pass # Ignore logging errors during shutdown
+            pass
     except Exception as e:
-        # Use global color vars
         print(f"{C_RED}\nAn unexpected critical error occurred: {e}{C_RESET}")
-        # Log the full traceback for debugging
         try:
             logger.critical(f"An unexpected critical error occurred: {e}", exc_info=True)
         except Exception:
-             # If logging itself fails, print traceback to console
              print(f"{C_RED}Traceback:{C_RESET}")
              traceback.print_exc()
         pause(f"{C_YELLOW}An critical error occurred. Check '{LOG_FILENAME}' if logging was enabled. Press Enter to exit.{C_RESET}")
     finally:
         try:
             logger.info("="*30 + " Script Execution Finished " + "="*30 + "\n")
+            # Ensure all handlers are closed on exit
+            for handler in logger.handlers[:]:
+                try:
+                    handler.close()
+                    logger.removeHandler(handler)
+                except Exception as e:
+                    print(f"Warning: Error closing log handler during shutdown: {e}")
         except Exception:
-            pass # Ignore logging errors during shutdown
-        # Deinitialize colorama on exit
+            pass
         if colorama:
-            colorama.deinit()
+            try:
+                colorama.deinit()
+            except Exception:
+                pass # Ignore errors during final cleanup
