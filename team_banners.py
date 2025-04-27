@@ -316,48 +316,36 @@ def load_config():
         sys.exit(1)
 
 
-def update_settings():
+def update_settings(config): # Accept config dictionary
     """Allows the user to update settings in the config file."""
-    config_proxy = configparser.ConfigParser()
+    config_parser = configparser.ConfigParser() # Use a parser to write changes
+    config_parser['DEFAULT'] = config # Load current config into parser
+
     logger.info("Entered settings menu.")
 
     while True:
         clear_screen()
         print_title("Settings Menu")
-        # Initialize defaults for display before reading
-        current_drive_id, current_api_key, current_base_dir = ('Not Set',) * 3
-        current_colors, current_logging, current_upload = ('true',) * 3 # Default display state
-        base_dir_for_logging = None
+        # Read values directly from the passed config dictionary
+        current_drive_id = config.get('drive_id', '')
+        current_api_key = config.get('api_key', '')
+        current_base_dir = config.get('base_dir', 'Not Set')
+        current_colors = config.get('enable_colors', 'true').lower()
+        current_logging = config.get('enable_logging', 'true').lower()
+        current_upload = config.get('enable_upload', 'true').lower()
+        base_dir_for_logging = current_base_dir # For logging setup on change
 
-        try:
-            config_proxy.read(CONFIG_FILE, encoding='utf-8')
-            if 'DEFAULT' not in config_proxy:
-                raise configparser.Error("Config file is missing [DEFAULT] section.")
-            current = config_proxy['DEFAULT']
-            current_drive_id = current.get('drive_id', '') # Allow blank
-            current_api_key = current.get('api_key', '') # Allow blank
-            current_base_dir = current.get('base_dir', 'Not Set')
-            current_colors = current.get('enable_colors', 'true').lower()
-            current_logging = current.get('enable_logging', 'true').lower()
-            current_upload = current.get('enable_upload', 'true').lower() # Added upload setting
-            base_dir_for_logging = current_base_dir
+        color_status = f"{C_GREEN}Enabled{C_RESET}" if current_colors == 'true' else f"{C_RED}Disabled{C_RESET}"
+        logging_status = f"{C_GREEN}Enabled{C_RESET}" if current_logging == 'true' else f"{C_RED}Disabled{C_RESET}"
+        upload_status = f"{C_GREEN}Enabled{C_RESET}" if current_upload == 'true' else f"{C_RED}Disabled{C_RESET}"
 
-            color_status = f"{C_GREEN}Enabled{C_RESET}" if current_colors == 'true' else f"{C_RED}Disabled{C_RESET}"
-            logging_status = f"{C_GREEN}Enabled{C_RESET}" if current_logging == 'true' else f"{C_RED}Disabled{C_RESET}"
-            upload_status = f"{C_GREEN}Enabled{C_RESET}" if current_upload == 'true' else f"{C_RED}Disabled{C_RESET}" # Added upload status
-
-            print(f"1. Google Drive Folder ID/URL: {C_YELLOW}{current_drive_id or '(blank)'}{C_RESET}")
-            print(f"2. S-UL API Key: {C_YELLOW}{current_api_key or '(blank)'}{C_RESET}")
-            print(f"3. Base Folder: {C_YELLOW}{current_base_dir}{C_RESET}")
-            print(f"4. Console Colors: {color_status}")
-            print(f"5. File Logging: {logging_status}")
-            print(f"6. Enable Uploads: {upload_status}") # Added upload toggle option
-            print(f"\n{C_YELLOW}0{C_RESET}. Back to Main Menu")
-
-        except (configparser.Error, IOError) as e:
-            print_error(f"Could not read config file: {e}", log_exception=True)
-            pause()
-            return
+        print(f"1. Google Drive Folder ID/URL: {C_YELLOW}{current_drive_id or '(blank)'}{C_RESET}")
+        print(f"2. S-UL API Key: {C_YELLOW}{current_api_key or '(blank)'}{C_RESET}")
+        print(f"3. Base Folder: {C_YELLOW}{current_base_dir}{C_RESET}")
+        print(f"4. Console Colors: {color_status}")
+        print(f"5. File Logging: {logging_status}")
+        print(f"6. Enable Uploads: {upload_status}")
+        print(f"\n{C_YELLOW}0{C_RESET}. Back to Main Menu")
 
         choice = input(f"\nChoose setting to change ({C_YELLOW}1-6{C_RESET}, or {C_YELLOW}0{C_RESET} to exit): ").strip()
 
@@ -371,7 +359,8 @@ def update_settings():
             old_value = current_drive_id
             new_value_input = input(f"Enter new Google Drive Folder ID or URL (current: {old_value or '(blank)'}): ").strip()
             new_value = new_value_input
-            config_proxy['DEFAULT'][setting_key] = new_value
+            config[setting_key] = new_value # Update in-memory dict
+            config_parser['DEFAULT'][setting_key] = new_value # Update parser for saving
             setting_changed = True
         elif choice == '2':
             setting_key = 'api_key'
@@ -379,11 +368,13 @@ def update_settings():
             new_value_input = input(f"Enter new S-UL API key (current: {old_value or '(blank)'}): ").strip()
             new_value = new_value_input
             # If API key is removed, disable uploads automatically
-            if not new_value and config_proxy['DEFAULT'].get('enable_upload', 'true').lower() == 'true':
-                 config_proxy['DEFAULT']['enable_upload'] = 'false'
+            if not new_value and config.get('enable_upload', 'true').lower() == 'true':
+                 config['enable_upload'] = 'false' # Update in-memory dict
+                 config_parser['DEFAULT']['enable_upload'] = 'false' # Update parser
                  print_warning("API key removed, automatically disabling uploads.")
                  logger.warning("API key removed, automatically disabling uploads.")
-            config_proxy['DEFAULT'][setting_key] = new_value
+            config[setting_key] = new_value # Update in-memory dict
+            config_parser['DEFAULT'][setting_key] = new_value # Update parser
             setting_changed = True
         elif choice == '3':
             setting_key = 'base_dir'
@@ -391,7 +382,8 @@ def update_settings():
             new_value_input = input(f"Enter new base folder path (current: {old_value}): ").strip()
             if os.path.isdir(new_value_input):
                 new_value = os.path.abspath(new_value_input)
-                config_proxy['DEFAULT'][setting_key] = new_value
+                config[setting_key] = new_value # Update in-memory dict
+                config_parser['DEFAULT'][setting_key] = new_value # Update parser
                 setting_changed = True
             elif not new_value_input:
                  print_warning("Base directory cannot be empty.")
@@ -403,7 +395,8 @@ def update_settings():
             setting_key = 'enable_colors'
             old_value = current_colors
             new_value = 'false' if old_value == 'true' else 'true'
-            config_proxy['DEFAULT'][setting_key] = new_value
+            config[setting_key] = new_value # Update in-memory dict
+            config_parser['DEFAULT'][setting_key] = new_value # Update parser
             apply_color_settings(new_value)
             print_info(f"Console colors set to: {'Enabled' if new_value == 'true' else 'Disabled'}")
             setting_changed = True
@@ -412,7 +405,8 @@ def update_settings():
             setting_key = 'enable_logging'
             old_value = current_logging
             new_value = 'false' if old_value == 'true' else 'true'
-            config_proxy['DEFAULT'][setting_key] = new_value
+            config[setting_key] = new_value # Update in-memory dict
+            config_parser['DEFAULT'][setting_key] = new_value # Update parser
             if base_dir_for_logging and base_dir_for_logging != 'Not Set':
                  setup_file_logging(base_dir_for_logging, new_value)
                  print_info(f"File logging set to: {'Enabled' if new_value == 'true' else 'Disabled'}")
@@ -420,20 +414,22 @@ def update_settings():
                  pause("Setting toggled. Press Enter to save or choose another option.")
             else:
                  print_error("Cannot toggle logging: Base directory not set.")
-                 config_proxy['DEFAULT'][setting_key] = old_value
+                 config[setting_key] = old_value # Revert in-memory
+                 config_parser['DEFAULT'][setting_key] = old_value # Revert parser
                  pause()
         elif choice == '6': # Upload toggle
             setting_key = 'enable_upload'
             old_value = current_upload
             new_value = 'false' if old_value == 'true' else 'true'
             # Prevent enabling uploads if API key is missing
-            api_key_present = bool(config_proxy['DEFAULT'].get('api_key', ''))
+            api_key_present = bool(config.get('api_key', ''))
             if new_value == 'true' and not api_key_present:
                  print_error("Cannot enable uploads: S-UL API Key is not set (Option 2).")
                  pause()
                  setting_key = None # Prevent logging/saving this attempt
             else:
-                config_proxy['DEFAULT'][setting_key] = new_value
+                config[setting_key] = new_value # Update in-memory dict
+                config_parser['DEFAULT'][setting_key] = new_value # Update parser
                 print_info(f"Uploads set to: {'Enabled' if new_value == 'true' else 'Disabled'}")
                 setting_changed = True
                 pause("Setting toggled. Press Enter to save or choose another option.")
@@ -449,20 +445,23 @@ def update_settings():
         if setting_changed and setting_key: # Ensure setting_key is set before saving
             try:
                 with open(CONFIG_FILE, 'w', encoding='utf-8') as configfile:
-                    config_proxy.write(configfile)
+                    config_parser.write(configfile) # Save changes from parser
                 if choice not in ['4', '5', '6']:
                     print_success("Setting updated!")
                 logger.info(f"Setting '{setting_key}' updated from '{old_value}' to '{new_value}'. Config saved.")
+                # If base_dir changed, re-setup logging for the new path
                 if setting_key == 'base_dir' and old_value != new_value:
                      logger.info("Base directory changed, re-initializing logger.")
-                     current_logging_state = config_proxy['DEFAULT'].get('enable_logging', 'true')
+                     current_logging_state = config.get('enable_logging', 'true') # Use updated in-memory config
                      setup_file_logging(new_value, current_logging_state)
                 if choice not in ['4', '5', '6']:
                     pause()
             except IOError as e:
                 print_error(f"Could not save config file: {e}", log_exception=True)
+                # Attempt to revert in-memory config change if save failed
                 if setting_key:
-                     config_proxy['DEFAULT'][setting_key] = old_value # Revert
+                     config[setting_key] = old_value # Revert in-memory dict
+                     # Also revert color/logging application if toggle failed to save
                      if setting_key == 'enable_colors': apply_color_settings(old_value)
                      if setting_key == 'enable_logging' and base_dir_for_logging: setup_file_logging(base_dir_for_logging, old_value)
                      # No immediate action needed for enable_upload revert
@@ -470,6 +469,7 @@ def update_settings():
                 pause()
 
 # --- Core Functionality ---
+# (Functions now generally accept `config` dictionary where needed)
 
 def read_uploaded_originals(csv_path):
     """Reads original filenames (column 2) from the CSV log."""
@@ -586,7 +586,6 @@ def download_drive_folder(drive_id, download_path, csv_path):
 def prompt_rename_images(import_path, export_path, files_to_process):
     """Prompts user to rename downloaded files individually and copies them."""
     if not files_to_process:
-        # This case should ideally be handled before calling, but double-check
         logger.info("prompt_rename_images called with no files to process.")
         return []
 
@@ -907,25 +906,29 @@ def edit_entry(csv_path, base_dir, config):
     import_path_base = os.path.join(base_dir, IMPORT_FOLDER)
     logger.info("Entered Edit Entry menu.")
 
+    # --- Optimization: Read CSV data only once at the start ---
+    header_clean, data = get_csv_data(csv_path, add_color=False)
+    if header_clean is None:
+        print_error("Could not read CSV file or file is invalid.")
+        pause()
+        return
+    if not data:
+        print_info("No entries found in the CSV log.")
+        logger.info("No CSV entries found to edit.")
+        pause()
+        return
+    # Create colored header for display
+    header_colored = [f"{C_CYAN}{h}{C_RESET}" for h in header_clean]
+    # --- End Optimization ---
+
     while True: # Loop for selecting entry
         clear_screen()
         print_title("Edit CSV Entry")
 
-        # Read data fresh each time an entry is selected or action completed
-        header_colored, data = get_csv_data(csv_path, add_color=True)
-        header_clean, _ = get_csv_data(csv_path, add_color=False) # For saving
-
-        if header_colored is None:
-            pause()
-            return
-        if not data:
-            print_info("No entries found in the CSV log.")
-            logger.info("No CSV entries found to edit.")
-            pause()
-            return
-
+        # --- Optimization: Use in-memory data for display ---
         display_header = [f"{C_CYAN}#{C_RESET}"] + header_colored
         display_data = [[idx + 1] + row for idx, row in enumerate(data)]
+        # --- End Optimization ---
 
         print(tabulate(display_data, headers=display_header, tablefmt="fancy_grid"))
         print(f"\n{C_YELLOW}0{C_RESET}. Back to Main Menu")
@@ -946,13 +949,14 @@ def edit_entry(csv_path, base_dir, config):
             continue
 
         # --- Entry Selected - Show Sub-Menu ---
-        # Work on a copy of the data list to handle potential save failures
-        data_copy = [list(row) for row in data] # Deep copy
-        selected_row = data_copy[item_index]
+        # Work on a copy of the selected row to handle potential save failures
+        original_row_data = list(data[item_index])
+        current_row_copy = list(original_row_data) # Copy for modifications
 
         try:
-            if len(selected_row) >= 4:
-                timestamp, original_name, renamed_name, current_url = selected_row[:4]
+            if len(current_row_copy) >= 4:
+                # Get initial values from the copy
+                timestamp, original_name, renamed_name, current_url = current_row_copy[:4]
             else:
                 raise ValueError("Row does not have enough columns.")
         except ValueError as e:
@@ -963,8 +967,8 @@ def edit_entry(csv_path, base_dir, config):
         action_loop_active = True
         while action_loop_active: # Loop for actions on selected entry
             clear_screen()
-            # Display current data for the entry being edited (from data_copy)
-            current_timestamp, current_original_name, current_renamed_name, current_url_display = data_copy[item_index][:4]
+            # Display current data for the entry being edited (from current_row_copy)
+            current_timestamp, current_original_name, current_renamed_name, current_url_display = current_row_copy[:4]
             print_title(f"Editing Entry #{item_index + 1}")
             print(f"  Original: {current_original_name}")
             print(f"  Renamed:  {current_renamed_name}")
@@ -983,13 +987,13 @@ def edit_entry(csv_path, base_dir, config):
 
             if action_choice == '1': # Change Renamed File
                 logger.info(f"Editing Entry #{item_index + 1}: Action 'Change Renamed File' selected.")
-                _, ext = os.path.splitext(current_renamed_name) # Use current name from data_copy
+                _, ext = os.path.splitext(current_renamed_name) # Use current name from copy
                 new_name_base = input(f"Enter the new name for '{current_renamed_name}' (without extension): ").strip()
 
                 if not new_name_base:
                     print_warning("New name cannot be empty.")
                     pause()
-                    continue # Back to action sub-menu
+                    continue
 
                 new_renamed_name = f"{new_name_base}{ext}"
                 old_export_path = os.path.join(export_path_base, current_renamed_name)
@@ -1013,16 +1017,16 @@ def edit_entry(csv_path, base_dir, config):
                         except OSError as e:
                             print_error(f"Failed to rename local file: {e}", log_exception=True)
                             pause()
-                            continue # Stay in action sub-menu
+                            continue
                     else:
                         print_info("New name is the same as the old name. Skipping local file rename.")
-                        renamed_locally = True # Treat as success for CSV update
+                        renamed_locally = True
                 else:
                     print_warning(f"Original renamed file '{current_renamed_name}' not found in '{EXPORT_FOLDER}'.")
-                    renamed_locally = True # Allow CSV update even if file missing
+                    renamed_locally = True
 
                 # Optionally re-upload
-                new_url_after_rename = "" if not uploads_enabled else current_url_display # Default URL
+                new_url_after_rename = "" if not uploads_enabled else current_url_display
                 if renamed_locally and uploads_enabled:
                     reupload_choice = get_yes_no_input(f"Re-upload '{new_renamed_name}' now?")
                     if reupload_choice:
@@ -1034,15 +1038,15 @@ def edit_entry(csv_path, base_dir, config):
                             else: print_warning("Re-upload failed. Keeping previous URL (if any).")
                     else:
                         logger.info("User chose not to re-upload after rename.")
-                        new_url_after_rename = current_url_display # Keep old URL if not re-uploading
+                        new_url_after_rename = current_url_display
                 elif not uploads_enabled:
-                     new_url_after_rename = "" # Clear URL if uploads disabled
+                     new_url_after_rename = ""
 
-                # Update data_copy list in memory
-                data_copy[item_index][2] = new_renamed_name # Update Renamed
-                data_copy[item_index][3] = str(new_url_after_rename) # Update URL
-                data_copy[item_index][0] = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f") # Update Timestamp
-                save_needed = True # Mark CSV for saving
+                # Update current_row_copy in memory
+                current_row_copy[2] = new_renamed_name
+                current_row_copy[3] = str(new_url_after_rename)
+                current_row_copy[0] = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+                save_needed = True
 
             elif action_choice == '2': # Re-upload File
                  logger.info(f"Editing Entry #{item_index + 1}: Action 'Re-upload File' selected.")
@@ -1055,7 +1059,7 @@ def edit_entry(csv_path, base_dir, config):
                       pause()
                       continue
 
-                 file_to_upload = os.path.join(export_path_base, current_renamed_name) # Use current name
+                 file_to_upload = os.path.join(export_path_base, current_renamed_name)
                  if not os.path.exists(file_to_upload):
                       print_error(f"Cannot re-upload: File '{current_renamed_name}' not found in '{EXPORT_FOLDER}'.")
                       pause()
@@ -1065,10 +1069,10 @@ def edit_entry(csv_path, base_dir, config):
                  new_url_after_reupload = upload_to_sul(file_to_upload, api_key)
 
                  if new_url_after_reupload:
-                      # Update data_copy list in memory
-                      data_copy[item_index][3] = new_url_after_reupload # Update URL
-                      data_copy[item_index][0] = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f") # Update Timestamp
-                      save_needed = True # Mark CSV for saving
+                      # Update current_row_copy in memory
+                      current_row_copy[3] = new_url_after_reupload
+                      current_row_copy[0] = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+                      save_needed = True
                  else:
                       print_error("Re-upload failed. CSV not updated.")
 
@@ -1077,20 +1081,20 @@ def edit_entry(csv_path, base_dir, config):
                  print_info(f"Current URL: {current_url_display or '(none)'}")
                  manual_url = input("Enter new URL (leave blank to remove): ").strip()
 
-                 # Update data_copy list in memory
-                 data_copy[item_index][3] = manual_url # Update URL
-                 data_copy[item_index][0] = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f") # Update Timestamp
-                 save_needed = True # Mark CSV for saving
+                 # Update current_row_copy in memory
+                 current_row_copy[3] = manual_url
+                 current_row_copy[0] = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+                 save_needed = True
 
             elif action_choice == '4': # Delete Entry
                  logger.info(f"Editing Entry #{item_index + 1}: Action 'Delete Entry' selected.")
                  print_warning(f"This will delete the entry for '{current_renamed_name}' from the CSV.")
                  delete_files_choice = get_yes_no_input("Also delete corresponding local files (Import/Export)?")
 
-                 # Remove from data_copy list
-                 removed_row_data = data_copy.pop(item_index)
+                 # Remove from main data list (not the copy)
+                 removed_row_data = data.pop(item_index)
                  print_success(f"Removed entry for '{current_renamed_name}' (Original: {current_original_name}).")
-                 logger.info(f"Removed item #{item_index+1} ('{current_renamed_name}', Original: '{current_original_name}') from in-memory list.")
+                 logger.info(f"Removed item #{item_index+1} ('{current_renamed_name}', Original: '{current_original_name}') from main data list.")
 
                  if delete_files_choice:
                      logger.info(f"User chose to delete local files for removed item #{item_index+1}.")
@@ -1114,7 +1118,24 @@ def edit_entry(csv_path, base_dir, config):
                  else:
                      logger.info(f"User chose not to delete local files.")
 
-                 save_needed = True # Mark CSV for saving (to save the deletion)
+                 # Save the modified (shorter) main data list back to CSV
+                 try:
+                     with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+                         writer = csv.writer(f)
+                         writer.writerow(header_clean)
+                         writer.writerows(data) # Write the main data list
+                     print_success("CSV log updated successfully.")
+                     logger.info(f"CSV log updated successfully after deleting item #{item_index+1}.")
+                     action_loop_active = False # Exit action loop after deletion
+                     pause("Entry deleted. Press Enter...")
+                 except (IOError, csv.Error) as e:
+                     print_error(f"Failed to save updated CSV after deletion: {e}", log_exception=True)
+                     print_warning("Log entry was removed in this session, but failed to save to disk.")
+                     # Attempt to restore the removed row in the main data list
+                     data.insert(item_index, original_row_data)
+                     pause()
+
+                 continue # Go back to entry selection after delete attempt
 
             elif action_choice == '0':
                  logger.debug("User chose to go back from action sub-menu.")
@@ -1125,33 +1146,28 @@ def edit_entry(csv_path, base_dir, config):
                  logger.warning(f"Invalid edit action choice: {action_choice}")
                  pause() # Pause on invalid choice
 
-            # Save CSV if an action was performed successfully
+            # Save CSV if an action other than delete was performed successfully
             if save_needed:
                 try:
+                    # Update the main data list with the modified row copy
+                    data[item_index] = list(current_row_copy)
                     with open(csv_path, 'w', newline='', encoding='utf-8') as f:
                         writer = csv.writer(f)
                         writer.writerow(header_clean) # Write clean header
-                        writer.writerows(data_copy) # Write updated data
+                        writer.writerows(data) # Write updated main data list
                     print_success("CSV log updated successfully.")
                     logger.info(f"CSV log updated successfully after action '{action_choice}' on item #{item_index + 1}.")
-                    # Update the main 'data' list to reflect the saved changes
-                    data = [list(row) for row in data_copy]
-                    # If deletion occurred, break inner loop and go back to entry selection
-                    if action_choice == '4':
-                        pause("Entry deleted. Press Enter...")
-                        action_loop_active = False # Exit action loop after deletion
-                    else:
-                         # Update local variables for display in the next iteration of action loop
-                         timestamp, original_name, renamed_name, current_url = data_copy[item_index][:4]
-                         pause("Action complete. Press Enter...") # Pause after successful action
+                    pause("Action complete. Press Enter...") # Pause after successful action
                 except (IOError, csv.Error) as e:
                     print_error(f"Failed to save updated CSV: {e}", log_exception=True)
                     print_warning("CSV update failed. Changes might be lost.")
-                    # Do not update main 'data' list if save failed
+                    # Main data list was already updated, difficult to revert cleanly here.
                     pause() # Pause after save error
 
-                # Reset flag after attempting save
+                # Reset flag and potentially break inner loop if needed, or just let it loop
                 save_needed = False
+                # Optionally break action_loop_active here if you want to go back to entry selection after each successful action
+                # action_loop_active = False
 
 
 # --- Bulk Upload Function ---
@@ -1227,7 +1243,7 @@ def bulk_upload_from_csv(config):
 
             # --- Skip if URL already exists ---
             if current_url:
-                print_info(f"Skipping '{renamed_name}': Already has URL '{current_url}'.")
+                print_info(f"Skipping '{renamed_name}': Already has URL.")
                 logger.info(f"Bulk upload skip: '{renamed_name}' already has URL.")
                 skipped_has_url += 1
                 continue
@@ -1512,7 +1528,7 @@ def show_explanation():
 
     pause("Press Enter to return to the main menu...")
 
-# --- Start Script Function ---
+# --- Start Script Function (Restored & Updated) ---
 def start_script(config):
     """Main workflow: Choose source, get files, choose rename method, upload, log."""
     clear_screen()
@@ -1689,7 +1705,7 @@ def start_script(config):
     logger.info("Main script execution (Option 4) finished.")
     pause()
 
-# --- Bulk Rename Existing Items Function ---
+# --- Bulk Rename Existing Items Function (Added) ---
 def run_bulk_rename_existing(config):
     """Renames all items listed in the CSV sequentially."""
     clear_screen()
@@ -1726,7 +1742,8 @@ def run_bulk_rename_existing(config):
             print_error("Base name cannot be empty.")
 
     start_number = 1
-    num_digits = len(str(len(data) + start_number - 1)) # Auto-detect digits needed
+    # Calculate number of digits needed for padding based on total items
+    num_digits = len(str(len(data) + start_number - 1))
     print_info(f"Renaming {len(data)} items using base '{base_name}' starting from {start_number:0{num_digits}d}...")
     logger.info(f"Bulk renaming {len(data)} existing items with base '{base_name}', start {start_number}, digits {num_digits}.")
 
@@ -1757,6 +1774,8 @@ def run_bulk_rename_existing(config):
         try:
             old_renamed_name = row[renamed_idx]
             _, ext = os.path.splitext(old_renamed_name)
+            # Ensure extension is preserved, handle cases with no extension
+            ext = ext if ext else ""
             new_filename_base = f"{base_name}{i + start_number:0{num_digits}d}"
             new_filename = f"{new_filename_base}{ext}"
 
@@ -1783,31 +1802,28 @@ def run_bulk_rename_existing(config):
         return
 
     # Second pass: Perform renames, using temporary names if needed
-    final_renames = []
+    final_data = [list(row) for row in data] # Create a mutable copy for final output
     rename_log = [] # Track actual renames performed
     for rename_info in potential_renames:
         old_path = rename_info["old_path"]
         new_path = rename_info["new_path"]
         old_name = rename_info["old_name"]
         new_name = rename_info["new_name"]
+        item_index = rename_info["index"]
         temp_path = None
 
         if not os.path.exists(old_path):
             print_warning(f"Skipping '{old_name}': File not found in '{EXPORT_FOLDER}'.")
             logger.warning(f"Bulk rename skip: File not found at '{old_path}'.")
             skipped_count += 1
-            # Add original row to final list to keep it in CSV
-            final_renames.append(data[rename_info["index"]])
-            continue
+            continue # Keep original row data in final_data
 
         if old_path == new_path:
             print_info(f"Skipping '{old_name}': Name is already correct.")
             logger.info(f"Bulk rename skip: '{old_name}' already has the target name.")
-            final_renames.append(data[rename_info["index"]]) # Keep original row
-            continue
+            continue # Keep original row data
 
         # Check if the target *new* path exists AND is not the same as the *current* old path
-        # This handles cases where a file might be renamed *into* a name that another file *currently* has
         if os.path.exists(new_path):
             # Use a temporary name to avoid collision during the process
             temp_suffix = f"__bulk_rename_temp_{datetime.now().strftime('%f')}"
@@ -1816,11 +1832,13 @@ def run_bulk_rename_existing(config):
                 os.rename(old_path, temp_path)
                 logger.info(f"Renamed '{old_name}' to temporary '{os.path.basename(temp_path)}' to avoid collision.")
                 temp_export_files[new_path] = temp_path # Record that the target file is now at temp_path
+                # Mark this rename as pending finalization from temp
+                rename_info["status"] = "pending_temp"
             except OSError as e:
                 print_error(f"Failed to rename '{old_name}' to temporary path: {e}", log_exception=True)
                 error_count += 1
-                final_renames.append(data[rename_info["index"]]) # Keep original row on error
-                continue
+                rename_info["status"] = "error"
+                continue # Keep original row data on error
         else:
             # Directly rename if no conflict
             try:
@@ -1828,17 +1846,16 @@ def run_bulk_rename_existing(config):
                 rename_log.append(f"'{old_name}' -> '{new_name}'")
                 logger.info(f"Bulk rename: Renamed '{old_name}' to '{new_name}'.")
                 renamed_count += 1
+                rename_info["status"] = "renamed"
             except OSError as e:
                 print_error(f"Failed to rename '{old_name}' to '{new_name}': {e}", log_exception=True)
                 error_count += 1
-                final_renames.append(data[rename_info["index"]]) # Keep original row on error
-                continue
+                rename_info["status"] = "error"
+                continue # Keep original row data on error
 
-        # Update the row data for the final list
-        updated_row = list(data[rename_info["index"]]) # Copy original row
-        updated_row[renamed_idx] = new_name # Set new name
-        updated_row[ts_idx] = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f") # Update timestamp
-        final_renames.append(updated_row)
+        # Update the row data in the final list
+        final_data[item_index][renamed_idx] = new_name # Set new name
+        final_data[item_index][ts_idx] = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f") # Update timestamp
 
     # Third pass: Rename temporary files to their final names
     temp_rename_errors = 0
@@ -1849,11 +1866,24 @@ def run_bulk_rename_existing(config):
             final_base = os.path.basename(final_target_path)
             rename_log.append(f"'{temp_base}' (temp) -> '{final_base}'")
             logger.info(f"Bulk rename: Renamed temporary '{temp_base}' to final '{final_base}'.")
-            renamed_count += 1 # Count successful renames from temp
+            # Find the corresponding entry in potential_renames to mark as fully renamed
+            for info in potential_renames:
+                if info.get("status") == "pending_temp" and info["new_path"] == final_target_path:
+                    info["status"] = "renamed"
+                    renamed_count += 1
+                    break
         except OSError as e:
             print_error(f"Failed to rename temporary file '{temp_source_path}' to '{final_target_path}': {e}", log_exception=True)
             temp_rename_errors += 1
             error_count += 1 # Increment overall error count
+            # Mark the corresponding entry as error
+            for info in potential_renames:
+                if info.get("status") == "pending_temp" and info["new_path"] == final_target_path:
+                    info["status"] = "error_temp_rename"
+                    # Revert the name change in final_data for this entry
+                    final_data[info["index"]][renamed_idx] = info["old_name"]
+                    break
+
 
     # Save the final data back to CSV
     if renamed_count > 0 or skipped_count > 0 or error_count > 0: # Save if anything changed or errors occurred
@@ -1862,7 +1892,7 @@ def run_bulk_rename_existing(config):
             with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
                 writer = csv.writer(csvfile)
                 writer.writerow(header_clean)
-                writer.writerows(final_renames) # Write the potentially modified data
+                writer.writerows(final_data) # Write the potentially modified data
             print_success("CSV log updated successfully.")
             logger.info(f"CSV log saved after bulk rename. Renamed: {renamed_count}, Skipped: {skipped_count}, Errors: {error_count}.")
         except (IOError, csv.Error) as e:
@@ -1891,18 +1921,15 @@ def run_bulk_rename_existing(config):
 def menu():
     """Displays the main menu and handles user choices."""
     init_config()
-    config = load_config()
+    config = load_config() # Load config once
     logger.info("="*30 + " Script Execution Started " + "="*30)
 
     while True:
         clear_screen()
-        try:
-             config = load_config()
-             base_dir = config.get("base_dir", "Not Set")
-             csv_path = os.path.join(base_dir, CSV_FILENAME) if base_dir != "Not Set" else None
-             logger.debug("Main menu loop started. Config reloaded.")
-        except SystemExit:
-             return
+        # No need to reload config here anymore unless explicitly changed
+        base_dir = config.get("base_dir", "Not Set")
+        csv_path = os.path.join(base_dir, CSV_FILENAME) if base_dir != "Not Set" else None
+        logger.debug("Displaying main menu.")
 
         print_title("Main Menu")
         print(f"Base Directory: {C_YELLOW}{base_dir}{C_RESET}")
@@ -1932,32 +1959,33 @@ def menu():
                 print_error("Base directory not set, cannot locate CSV.")
                 pause()
         elif choice == "2":
-            show_folder_structure(config)
+            show_folder_structure(config) # Pass config
         elif choice == "3":
-            update_settings()
+            update_settings(config) # Pass config, updates it in-place
+            # No need to reload here, changes are reflected in the passed dict
         elif choice == "4":
-            start_script(config)
+            start_script(config) # Pass config
         elif choice == "5":
              if csv_path and base_dir != "Not Set":
-                edit_entry(csv_path, base_dir, config)
+                edit_entry(csv_path, base_dir, config) # Pass config
              else:
                 print_error("Base directory not set or CSV path invalid, cannot edit entries.")
                 pause()
         elif choice == "6": # New Bulk Rename action
              if csv_path and base_dir != "Not Set":
-                 run_bulk_rename_existing(config) # Changed function call
+                 run_bulk_rename_existing(config) # Pass config
              else:
                  print_error("Base directory not set or CSV path invalid, cannot bulk rename.")
                  pause()
         elif choice == "7": # Corrected Bulk Upload action
              if csv_path and base_dir != "Not Set":
-                 bulk_upload_from_csv(config)
+                 bulk_upload_from_csv(config) # Pass config
              else:
                  print_error("Base directory not set or CSV path invalid, cannot bulk upload.")
                  pause()
         elif choice == "8": # Corrected Nuke action
             if base_dir != "Not Set":
-                 nuke_everything(base_dir)
+                 nuke_everything(base_dir) # Doesn't strictly need config, just base_dir
             else:
                  print_error("Base directory not set, cannot nuke.")
                  pause()
