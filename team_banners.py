@@ -1,34 +1,39 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 ## All written with GPT and Gemini (honestly Gemini did the harder cooking), but hey it works :D
 # A tool to fetch files from a public Google Drive, upload them to s-ul.eu via API, and manage the process.
-# - Saves Google Drive ID and API key in a Config file.
+# - Saves Google Drive ID, API key, color, and logging preferences in a Config file.
 # - Creates a CSV log with: Timestamp, Original Filename, Renamed Filename, s-ul.eu URL.
 # - Allows deleting and renaming/reuploading specific uploaded files.
 # - Subsequent runs skip files already processed and logged in the CSV.
+# - Conditionally logs activity to script_activity.log based on settings.
+# - Conditionally uses console colors based on settings.
 
 ## Usage:
 # 1. Create a new directory (e.g., "team banners").
 # 2. Place this script (team_banners.py) inside the new directory.
 # 3. Run the script.
-# 4. Follow the prompts to enter the public Google Drive folder ID or URL.
-# 5. Enter your s-ul.eu API key (found at https://s-ul.eu/account/configurations).
-# 6. Select option 4 from the main menu to start the file processing.
+# 4. Follow the prompts to enter the public Google Drive folder ID or URL, API key, and color/logging preferences.
+# 5. Select option 4 from the main menu to start the file processing.
 
 ## Directory structure created by the script:
 # .
-# ├── settings.conf       (Configuration file)
-# ├── team_banners.py     (This script)
-# ├── index.csv           (Log of processed files)
-# ├── Images import/      (Downloaded files from Google Drive)
+# ├── settings.conf      (Configuration file)
+# ├── team_banners.py    (This script)
+# ├── index.csv          (Log of processed files)
+# ├── script_activity.log(Activity log file - if enabled)
+# ├── Images import/     (Downloaded files from Google Drive)
 # │   ├── image_01.jpg
 # │   ├── image_02.jpg
 # │   └── ...
-# └── Images export/      (Renamed files for s-ul.eu upload)
+# └── Images export/     (Renamed files for s-ul.eu upload)
 #     ├── TEAM1.jpg
 #     ├── TEAM2.jpg
 #     └── ...
 
 ## Install required libraries:
-# pip install requests gdown tabulate configparser
+# pip install requests gdown tabulate configparser colorama
 
 import os
 import shutil
@@ -36,596 +41,1468 @@ import requests
 import gdown
 import csv
 import configparser
-import shutil
 from datetime import datetime
 from tabulate import tabulate
+import sys
+import logging # Added for logging
+import traceback # Added for detailed error logging
+import re # For stripping ANSI codes
 
+# --- Globals & Constants ---
 CONFIG_FILE = "settings.conf"
+IMPORT_FOLDER = "Images import"
+EXPORT_FOLDER = "Images export"
+CSV_FILENAME = "index.csv"
+LOG_FILENAME = "script_activity.log"
+
+# --- ANSI Color Code Definitions ---
+# These are the raw codes
+_COLOR_CODE_RESET = "\033[0m"
+_COLOR_CODE_RED = "\033[91m"
+_COLOR_CODE_GREEN = "\033[92m"
+_COLOR_CODE_YELLOW = "\033[93m"
+_COLOR_CODE_BLUE = "\033[94m"
+_COLOR_CODE_CYAN = "\033[96m"
+_COLOR_CODE_MAGENTA = "\033[95m"
+
+# --- Global Color Variables (will be updated based on settings) ---
+# These will hold either the codes above or empty strings
+C_RESET = ""
+C_RED = ""
+C_GREEN = ""
+C_YELLOW = ""
+C_BLUE = ""
+C_CYAN = ""
+C_MAGENTA = ""
+
+# --- Setup Colorama (Optional but recommended for Windows) ---
+try:
+    import colorama
+    # Initialize only if colors are likely to be enabled later
+    # We'll call init() properly in apply_color_settings if needed
+except ImportError:
+    print(f"{_COLOR_CODE_YELLOW}Optional library 'colorama' not found. Colors might not work correctly on older Windows versions.{_COLOR_CODE_RESET}")
+    print(f"{_COLOR_CODE_YELLOW}Install with: pip install colorama{_COLOR_CODE_RESET}")
+    colorama = None # Set to None if not available
+
+# --- Setup Logging ---
+logger = logging.getLogger(__name__) # Get logger instance
+# Prevent adding multiple handlers if script is reloaded in some environments
+if not logger.handlers:
+    logger.addHandler(logging.NullHandler()) # Add NullHandler initially
+logger.setLevel(logging.INFO) # Set base level for the logger
+
+def setup_file_logging(base_dir, enable_logging):
+    """Configures or removes file logging based on the enable_logging flag."""
+    log_file_path = os.path.join(base_dir, LOG_FILENAME)
+    # Remove existing file handler if present
+    file_handler = None
+    for handler in logger.handlers[:]:
+        if isinstance(handler, logging.FileHandler):
+            file_handler = handler
+            logger.removeHandler(handler)
+            handler.close()
+            break # Assume only one file handler
+
+    if str(enable_logging).lower() == 'true':
+        if file_handler:
+            logger.info("File logging already configured (handler removed and re-added).")
+        else:
+            logger.info("Configuring file logging.")
+        # Create and add the file handler
+        fh = logging.FileHandler(log_file_path, encoding='utf-8')
+        fh.setLevel(logging.INFO)
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+        fh.setFormatter(formatter)
+        logger.addHandler(fh)
+        logger.info(f"File logging enabled. Log file: {log_file_path}")
+    else:
+        if file_handler:
+            logger.info("File logging disabled and handler removed.")
+        else:
+            # Log only if NullHandler is the only one left
+            if len(logger.handlers) == 1 and isinstance(logger.handlers[0], logging.NullHandler):
+                 # This message won't go anywhere unless another handler is added later
+                 logger.info("File logging is disabled. No file handler configured.")
+            elif len(logger.handlers) > 1:
+                 logger.info("File logging disabled.")
+
+
+def apply_color_settings(enable_colors):
+    """Updates global color variables based on the setting."""
+    global C_RESET, C_RED, C_GREEN, C_YELLOW, C_BLUE, C_CYAN, C_MAGENTA
+    use_colors = str(enable_colors).lower() == 'true'
+
+    if use_colors:
+        C_RESET = _COLOR_CODE_RESET
+        C_RED = _COLOR_CODE_RED
+        C_GREEN = _COLOR_CODE_GREEN
+        C_YELLOW = _COLOR_CODE_YELLOW
+        C_BLUE = _COLOR_CODE_BLUE
+        C_CYAN = _COLOR_CODE_CYAN
+        C_MAGENTA = _COLOR_CODE_MAGENTA
+        # Initialize colorama if available and colors enabled
+        if colorama:
+            colorama.init(autoreset=True)
+    else:
+        C_RESET = ""
+        C_RED = ""
+        C_GREEN = ""
+        C_YELLOW = ""
+        C_BLUE = ""
+        C_CYAN = ""
+        C_MAGENTA = ""
+        # Deinitialize colorama if colors are disabled
+        if colorama:
+            colorama.deinit()
+
+# --- Utility Functions ---
+
+def clear_screen():
+    """Clears the terminal screen."""
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+def pause(message="Press Enter to continue..."):
+    """Pauses execution and waits for user to press Enter."""
+    input(f"\n{C_MAGENTA}{message}{C_RESET}")
+
+# --- Print functions remain for direct user feedback, logging functions handle file logging ---
+def print_title(title):
+    """Prints a formatted title in blue (if colors enabled)."""
+    print(f"\n{C_BLUE}=== {title} ==={C_RESET}\n")
+
+def print_success(message):
+    """Prints a success message in green (if colors enabled)."""
+    print(f"{C_GREEN}[OK] {message}{C_RESET}")
+    logger.info(f"OK: {strip_ansi_codes(message)}") # Log clean message
+
+def print_warning(message):
+    """Prints a warning message in yellow (if colors enabled)."""
+    print(f"{C_YELLOW}[WARN] {message}{C_RESET}")
+    logger.warning(strip_ansi_codes(message)) # Log clean message
+
+def print_error(message, log_exception=False):
+    """Prints an error message in red (if colors enabled) and logs it."""
+    print(f"{C_RED}[ERROR] {message}{C_RESET}")
+    clean_message = strip_ansi_codes(message)
+    logger.error(clean_message) # Log clean message
+    if log_exception:
+        # Logs the current exception traceback to the log file
+        logger.exception(f"An exception occurred related to error: {clean_message}")
+
+def print_info(message):
+    """Prints an informational message in cyan (if colors enabled). Does not log."""
+    print(f"{C_CYAN}[INFO] {message}{C_RESET}")
+
+# --- Configuration ---
+
+def get_yes_no_input(prompt):
+    """Gets a 'y' or 'n' input from the user."""
+    while True:
+        choice = input(f"{prompt} ({C_GREEN}y{C_RESET}/{C_RED}n{C_RESET}): ").strip().lower()
+        if choice in ['y', 'n']:
+            return choice == 'y'
+        else:
+            print_error("Invalid input. Please enter 'y' or 'n'.") # Error not logged
 
 def init_config():
+    """Initializes the configuration file if it doesn't exist."""
     if not os.path.exists(CONFIG_FILE):
-        print("Config not found. Let's set it up.")
+        print_info("Config file not found. Let's set it up.")
         drive_id = input("Enter Google Drive folder ID or URL: ").strip()
         api_key = input("Enter s-ul.eu API key: ").strip()
+        # Ask for color and logging preferences
+        enable_colors = get_yes_no_input("Enable console colors?")
+        enable_logging = get_yes_no_input("Enable file logging?")
+
+        # Use the script's directory as the default base directory
         base_dir = os.path.dirname(os.path.abspath(__file__))
+
+        # Apply settings immediately for feedback during setup
+        apply_color_settings(enable_colors)
+        setup_file_logging(base_dir, enable_logging) # Setup logging based on choice
+
+        logger.info("Attempting to initialize configuration file.")
 
         config = configparser.ConfigParser()
         config['DEFAULT'] = {
             'drive_id': drive_id,
             'api_key': api_key,
-            'base_dir': base_dir
+            'base_dir': base_dir,
+            'enable_colors': str(enable_colors).lower(), # Store as 'true'/'false'
+            'enable_logging': str(enable_logging).lower() # Store as 'true'/'false'
         }
 
-        with open(CONFIG_FILE, 'w') as configfile:
-            config.write(configfile)
-        print("Config saved.\n")
+        try:
+            with open(CONFIG_FILE, 'w', encoding='utf-8') as configfile:
+                config.write(configfile)
+            print_success("Config saved.")
+            logger.info(f"Config file '{CONFIG_FILE}' created and saved successfully.")
+            # Create necessary folders after saving config
+            os.makedirs(os.path.join(base_dir, IMPORT_FOLDER), exist_ok=True)
+            os.makedirs(os.path.join(base_dir, EXPORT_FOLDER), exist_ok=True)
+            print_success(f"Created folders: '{IMPORT_FOLDER}' and '{EXPORT_FOLDER}'.")
+            logger.info(f"Ensured directories exist: '{IMPORT_FOLDER}', '{EXPORT_FOLDER}'.")
+            pause()
+        except IOError as e:
+            message = f"Could not write config file: {e}"
+            print_error(message, log_exception=True)
+            logger.critical(f"CRITICAL: Failed to initialize config file '{CONFIG_FILE}'. Exiting.")
+            sys.exit(1) # Exit if config cannot be saved initially
+        except Exception as e: # Catch potential logging setup errors
+            message = f"An error occurred during initial setup: {e}"
+            print_error(message, log_exception=True)
+            logger.critical(f"CRITICAL: Failed during initial setup: {e}", exc_info=True)
+            sys.exit(1)
 
 def load_config():
+    """Loads configuration from the file, handling defaults for new settings."""
+    if not os.path.exists(CONFIG_FILE):
+        print_error(f"Configuration file '{CONFIG_FILE}' not found.")
+        print_info("Please run the script again to initialize the configuration.")
+        sys.exit(1)
+
     config = configparser.ConfigParser()
-    config.read(CONFIG_FILE)
-    return config['DEFAULT']
-
-def clear_screen():
-    os.system('cls' if os.name == 'nt' else 'clear')
-
-def update_settings():
-    config = configparser.ConfigParser()
-    config.read(CONFIG_FILE)
-
-    while True:
-        clear_screen()
-        current = config['DEFAULT']
-        print("=== Settings Menu ===\n")
-        print(f"1. Google Drive Folder ID/URL: {current['drive_id']}")
-        print(f"2. S-UL API Key: {current['api_key']}")
-        print(f"3. Base Folder: {current['base_dir']}")
-        print("0. Back to Main Menu")  # Changed from 4 to 0
-
-        choice = input("\nChoose setting to change (1-3, or 0 to exit): ").strip()
-
-        if choice == '1':
-            new_id = input("Enter new Google Drive Folder ID or URL: ").strip()
-            config['DEFAULT']['drive_id'] = new_id
-        elif choice == '2':
-            new_key = input("Enter new S-UL API key: ").strip()
-            config['DEFAULT']['api_key'] = new_key
-        elif choice == '3':
-            new_path = input("Enter new base folder path: ").strip()
-            if os.path.isdir(new_path):
-                config['DEFAULT']['base_dir'] = new_path
-            else:
-                input("[ERROR] Invalid folder path. Press Enter to continue...")
-                continue
-        elif choice == '0':  # Changed from '4' to '0'
-            clear_screen()
-            break
-        else:
-            input("[ERROR] Invalid option. Press Enter to continue...")
-            continue
-
-        with open(CONFIG_FILE, 'w') as configfile:
-            config.write(configfile)
-        input("[OK] Setting updated! Press Enter to continue...")
-
-
-def download_drive_folder(drive_id, download_path, csv_path):
-    clear_screen()
-    print("=== Download from Google Drive ===")
-
-    url = f"https://drive.google.com/drive/folders/{drive_id}" if "drive.google.com" not in drive_id else drive_id
-    print(f"Downloading from {url}")
-
-    os.makedirs(download_path, exist_ok=True)
-    existing_files_import = set(os.listdir(download_path))
-    uploaded_originals = read_uploaded_originals(csv_path)
-    newly_downloaded = []
-    skipped_count = 0
+    base_dir_from_config = None
+    enable_colors = 'true' # Default if missing
+    enable_logging = 'true' # Default if missing
 
     try:
-        gdown.download_folder(url, output=download_path, quiet=True, use_cookies=False, remaining_ok=True)
-        current_files_import = set(os.listdir(download_path))
-        for file in current_files_import:
-            if file not in existing_files_import and file not in uploaded_originals:
-                newly_downloaded.append(file)
-            elif file in existing_files_import or file in uploaded_originals:
-                skipped_count += 1
+        config.read(CONFIG_FILE, encoding='utf-8')
+        if 'DEFAULT' not in config:
+            raise configparser.Error("Missing [DEFAULT] section in config.")
 
-        print(f"\n[OK] Download attempt complete.")
-        if newly_downloaded:
-            print(f"Downloaded {len(newly_downloaded)} new files.")
-            print(f"Press Enter to rename the following new files:")
-            for file in newly_downloaded:
-                print(f"- {file}")
-            input()
-            clear_screen()
-            return newly_downloaded  # Return the list of new files
-        else:
-            print("[OK] No new files downloaded.")
-            # Don't prompt to return here, the renaming logic in start_script will handle it
-            return [] # Return an empty list
+        # Check for essential keys first
+        required_keys = ['drive_id', 'api_key', 'base_dir']
+        for key in required_keys:
+            if key not in config['DEFAULT']:
+                raise configparser.Error(f"Missing essential key '{key}' in config.")
 
-    except Exception as e:
-        print(f"[ERROR] An error occurred during download: {e}")
-        input("\nPress Enter to return to the main menu...")
+        base_dir_from_config = config['DEFAULT']['base_dir']
+
+        # Get color/logging settings, defaulting to 'true' if missing
+        enable_colors = config['DEFAULT'].get('enable_colors', 'true').lower()
+        enable_logging = config['DEFAULT'].get('enable_logging', 'true').lower()
+
+        # Apply settings based on loaded/defaulted values
+        apply_color_settings(enable_colors)
+        # Setup logging using the loaded base_dir and enable_logging flag
+        setup_file_logging(base_dir_from_config, enable_logging)
+
+        # Verify base_dir exists *after* setting up logging
+        if not os.path.isdir(base_dir_from_config):
+            message = f"Base directory specified in config does not exist: {base_dir_from_config}"
+            print_error(message) # Error logged
+            print_info("Please check settings.conf or delete it and run again.")
+            sys.exit(1)
+
+        logger.info("Configuration loaded successfully.")
+        # Return the full dictionary including the potentially defaulted color/log settings
+        # Ensure the returned dict reflects the actual state
+        loaded_config = dict(config['DEFAULT'])
+        loaded_config['enable_colors'] = enable_colors
+        loaded_config['enable_logging'] = enable_logging
+        return loaded_config
+
+    except (configparser.Error, IOError) as e:
+        message = f"Failed to load or parse configuration file: {e}"
+        # Try to apply basic color settings for the error message
+        apply_color_settings('true') # Assume colors OK for critical error
+        print_error(message)
+        # Attempt to log critical failure
+        if base_dir_from_config:
+             # Try setting up basic file logging for the critical error
+             setup_file_logging(base_dir_from_config, 'true')
+        logger.critical(f"CRITICAL: Failed to load configuration: {e}", exc_info=True)
+        sys.exit(1)
+    except Exception as e: # Catch other unexpected errors
+        message = f"An unexpected error occurred loading configuration: {e}"
+        apply_color_settings('true') # Assume colors OK for critical error
+        print_error(message)
+        logger.critical(f"CRITICAL: Unexpected error loading config: {e}", exc_info=True)
+        sys.exit(1)
+
+
+def update_settings():
+    """Allows the user to update settings in the config file."""
+    config_proxy = configparser.ConfigParser() # Use a proxy to manage changes
+    logger.info("Entered settings menu.")
+
+    while True:
         clear_screen()
-        return [] # Return an empty list if an error occurred
+        print_title("Settings Menu")
+        current_drive_id = 'Not Set'
+        current_api_key = 'Not Set'
+        current_base_dir = 'Not Set'
+        current_colors = 'true' # Default display
+        current_logging = 'true' # Default display
+        base_dir_for_logging = None # Track base dir for logging setup
+
+        try:
+            # Read config fresh each time to show current values
+            config_proxy.read(CONFIG_FILE, encoding='utf-8')
+            current = config_proxy['DEFAULT']
+            current_drive_id = current.get('drive_id', 'Not Set')
+            current_api_key = current.get('api_key', 'Not Set')
+            current_base_dir = current.get('base_dir', 'Not Set')
+            # Get current color/logging settings, default to 'true' if missing
+            current_colors = current.get('enable_colors', 'true').lower()
+            current_logging = current.get('enable_logging', 'true').lower()
+            base_dir_for_logging = current_base_dir # Get base dir for potential logging change
+
+            color_status = f"{C_GREEN}Enabled{C_RESET}" if current_colors == 'true' else f"{C_RED}Disabled{C_RESET}"
+            logging_status = f"{C_GREEN}Enabled{C_RESET}" if current_logging == 'true' else f"{C_RED}Disabled{C_RESET}"
+
+            print(f"1. Google Drive Folder ID/URL: {C_YELLOW}{current_drive_id}{C_RESET}")
+            print(f"2. S-UL API Key: {C_YELLOW}{current_api_key}{C_RESET}")
+            print(f"3. Base Folder: {C_YELLOW}{current_base_dir}{C_RESET}")
+            print(f"4. Console Colors: {color_status}")
+            print(f"5. File Logging: {logging_status}")
+            print(f"\n{C_YELLOW}0{C_RESET}. Back to Main Menu")
+
+        except (configparser.Error, IOError) as e:
+            print_error(f"Could not read config file: {e}", log_exception=True)
+            pause()
+            return # Return to main menu if config is broken
+
+        choice = input(f"\nChoose setting to change ({C_YELLOW}1-5{C_RESET}, or {C_YELLOW}0{C_RESET} to exit): ").strip()
+
+        setting_changed = False
+        setting_key = None
+        old_value = None
+        new_value = None
+
+        if choice == '1':
+            setting_key = 'drive_id'
+            old_value = current_drive_id
+            new_value_input = input(f"Enter new Google Drive Folder ID or URL (current: {old_value}): ").strip()
+            if new_value_input:
+                new_value = new_value_input
+                config_proxy['DEFAULT'][setting_key] = new_value
+                setting_changed = True
+            else:
+                 print_warning("Input cannot be empty.")
+                 pause()
+        elif choice == '2':
+            setting_key = 'api_key'
+            old_value = current_api_key
+            new_value_input = input(f"Enter new S-UL API key (current: {old_value}): ").strip()
+            if new_value_input:
+                new_value = new_value_input
+                config_proxy['DEFAULT'][setting_key] = new_value
+                setting_changed = True
+            else:
+                 print_warning("Input cannot be empty.")
+                 pause()
+        elif choice == '3':
+            setting_key = 'base_dir'
+            old_value = current_base_dir
+            new_value_input = input(f"Enter new base folder path (current: {old_value}): ").strip()
+            if os.path.isdir(new_value_input):
+                new_value = os.path.abspath(new_value_input)
+                config_proxy['DEFAULT'][setting_key] = new_value
+                setting_changed = True
+            elif not new_value_input:
+                 print_warning("Input cannot be empty.")
+                 pause()
+            else:
+                print_error("Invalid folder path.")
+                pause()
+        elif choice == '4':
+            setting_key = 'enable_colors'
+            old_value = current_colors
+            new_value = 'false' if old_value == 'true' else 'true' # Toggle
+            config_proxy['DEFAULT'][setting_key] = new_value
+            apply_color_settings(new_value) # Apply change immediately for UI feedback
+            print_info(f"Console colors set to: {'Enabled' if new_value == 'true' else 'Disabled'}")
+            setting_changed = True
+            pause("Setting toggled. Press Enter to save or choose another option.") # Give feedback
+        elif choice == '5':
+            setting_key = 'enable_logging'
+            old_value = current_logging
+            new_value = 'false' if old_value == 'true' else 'true' # Toggle
+            config_proxy['DEFAULT'][setting_key] = new_value
+            # Re-setup logging based on the new value and current base directory
+            if base_dir_for_logging and base_dir_for_logging != 'Not Set':
+                 setup_file_logging(base_dir_for_logging, new_value)
+                 print_info(f"File logging set to: {'Enabled' if new_value == 'true' else 'Disabled'}")
+                 setting_changed = True
+                 pause("Setting toggled. Press Enter to save or choose another option.") # Give feedback
+            else:
+                 print_error("Cannot toggle logging: Base directory not set.")
+                 config_proxy['DEFAULT'][setting_key] = old_value # Revert toggle
+                 pause()
+
+        elif choice == '0':
+            logger.info("Exited settings menu.")
+            break # Exit loop to return to main menu
+        else:
+            print_error("Invalid option.")
+            logger.warning(f"Invalid settings menu choice: {choice}")
+            pause()
+
+        # Save changes if any setting was modified
+        if setting_changed:
+            try:
+                with open(CONFIG_FILE, 'w', encoding='utf-8') as configfile:
+                    config_proxy.write(configfile)
+                # Only log if it wasn't just a toggle feedback pause
+                if choice not in ['4', '5']:
+                    print_success("Setting updated!")
+                logger.info(f"Setting '{setting_key}' updated from '{old_value}' to '{new_value}'. Config saved.")
+                # If base_dir changed, logging was already handled during the toggle logic for choice 3
+                if setting_key == 'base_dir' and old_value != new_value:
+                     logger.info("Base directory changed, re-initializing logger.")
+                     setup_file_logging(new_value, config_proxy['DEFAULT'].get('enable_logging', 'true'))
+
+                # Pause only if it wasn't a toggle that already paused
+                if choice not in ['4', '5']:
+                    pause()
+
+            except IOError as e:
+                print_error(f"Could not save config file: {e}", log_exception=True)
+                # Attempt to revert in-memory config change if save failed
+                if setting_key:
+                     config_proxy['DEFAULT'][setting_key] = old_value
+                     # Also revert color/logging application if toggle failed to save
+                     if setting_key == 'enable_colors': apply_color_settings(old_value)
+                     if setting_key == 'enable_logging' and base_dir_for_logging: setup_file_logging(base_dir_for_logging, old_value)
+                logger.error(f"Failed to save updated setting '{setting_key}'. Reverted in memory.")
+                pause()
+
+# --- Core Functionality ---
+
+# (read_uploaded_originals, download_drive_folder, prompt_rename_images, upload_to_sul, write_to_csv remain largely the same, relying on logger)
+# Minor adjustments made previously to use logger correctly are kept.
 
 def read_uploaded_originals(csv_path):
+    """Reads original filenames (column 2) from the CSV log."""
+    originals = set()
     if not os.path.exists(csv_path):
-        return set()
-    with open(csv_path, newline='', encoding="utf-8") as f:
-        reader = csv.reader(f)
-        next(reader, None)  # Skip the header row
-        return {row[1] for row in reader}  # Collect original filenames
+        logger.info(f"CSV file '{csv_path}' not found. Assuming no previously uploaded files.")
+        return originals # Return empty set
 
-def prompt_rename_images(import_path, export_path, uploaded_files, csv_path, new_files):
-    os.makedirs(export_path, exist_ok=True)
-    renamed = []
-    existing_renamed = set()
-    if os.path.exists(csv_path):
-        with open(csv_path, 'r', newline='', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                existing_renamed.add(row['Original'])
+    logger.info(f"Reading previously uploaded original filenames from '{csv_path}'.")
+    try:
+        with open(csv_path, 'r', newline='', encoding="utf-8") as f:
+            reader = csv.reader(f)
+            header = next(reader, None) # Skip header
+            original_col_index = 1 # Assuming 'Original' is the second column
 
-    files_to_rename = list(new_files) if new_files else [f for f in os.listdir(import_path) if f not in uploaded_files and f not in existing_renamed and os.path.isfile(os.path.join(import_path, f))]
+            if not header:
+                logger.warning(f"CSV file '{csv_path}' is empty or has no header.")
+                return originals
 
-    if files_to_rename:
-        if new_files:
-            print("=== New filenames ===")
-        else:
-            print("=== Renaming Images ===")
+            if len(header) <= original_col_index:
+                 logger.warning(f"CSV file '{csv_path}' header does not have expected 'Original' column at index {original_col_index}.")
+                 return originals # Cannot proceed if header is wrong
 
-        for file in files_to_rename:
-            src = os.path.join(import_path, file)
-            if not os.path.isfile(src):
-                continue
-            print(f"\nOriginal filename: {file}")
-            new_name_base = input("New name (no ext, leave blank for original): ").strip()
-            _, ext = os.path.splitext(file)
-            if not new_name_base:
-                new_name = file
+            processed_rows = 0
+            malformed_rows = 0
+            for i, row in enumerate(reader):
+                if len(row) > original_col_index:
+                    originals.add(row[original_col_index])
+                    processed_rows += 1
+                else:
+                    logger.warning(f"Skipping malformed row {i+1} in CSV '{csv_path}': {row}")
+                    malformed_rows += 1
+
+            logger.info(f"Found {len(originals)} unique original filenames in CSV. Processed {processed_rows} rows, skipped {malformed_rows} malformed rows.")
+
+    except (IOError, csv.Error) as e:
+        print_error(f"Could not read CSV file '{csv_path}': {e}", log_exception=True)
+    except StopIteration:
+        logger.info(f"CSV file '{csv_path}' contains only a header.")
+        pass # Handles empty file after header check
+
+    return originals
+
+def download_drive_folder(drive_id, download_path, csv_path):
+    """
+    Downloads files from Google Drive folder using gdown.
+    Filters the downloaded files to identify only those not already logged in the CSV.
+    """
+    clear_screen()
+    print_title("Download from Google Drive")
+    logger.info("Starting Google Drive download process.")
+
+    if not drive_id:
+        print_error("Google Drive ID/URL is not set in configuration.")
+        # Error logged by print_error
+        pause()
+        return []
+
+    url = f"https://drive.google.com/drive/folders/{drive_id}" if "drive.google.com" not in drive_id else drive_id
+    print_info(f"Attempting download from: {url}")
+    print_info(f"Downloading to: {download_path}")
+    logger.info(f"Drive URL/ID: {drive_id}")
+    logger.info(f"Download path: {download_path}")
+
+    os.makedirs(download_path, exist_ok=True)
+
+    # Get list of files already logged in the CSV
+    uploaded_originals = read_uploaded_originals(csv_path)
+    logger.info(f"Found {len(uploaded_originals)} files previously logged in CSV.")
+
+    # Get list of files currently present in the import directory *before* download
+    files_before_download = {f for f in os.listdir(download_path) if os.path.isfile(os.path.join(download_path, f))}
+    logger.info(f"Found {len(files_before_download)} files in import directory before download.")
+
+    files_to_process = [] # Files identified as needing rename/upload
+
+    try:
+        # --- Call gdown to download/update the folder ---
+        print_info("Starting gdown download/sync (this might take a while)...")
+        logger.info(f"Calling gdown.download_folder for URL: {url}")
+        gdown.download_folder(url, output=download_path, quiet=False, use_cookies=False, remaining_ok=True)
+        logger.info("gdown.download_folder process finished.")
+        print_info("gdown download/sync process finished.")
+
+        # --- Filter downloaded files ---
+        files_after_download = {f for f in os.listdir(download_path) if os.path.isfile(os.path.join(download_path, f))}
+        logger.info(f"Found {len(files_after_download)} files in import directory after download.")
+
+        processed_count = 0
+        skipped_logged_count = 0
+
+        print_info("Filtering downloaded files...")
+        logger.info("Filtering downloaded files against CSV log...")
+        for file in sorted(list(files_after_download)): # Sort for predictable processing order
+            if file not in uploaded_originals:
+                files_to_process.append(file)
+                if file not in files_before_download:
+                    logger.info(f"Identified new file for processing: {file}")
+                else:
+                    logger.info(f"Identified existing local file for processing (not in CSV): {file}")
+                processed_count += 1
             else:
-                new_name = new_name_base + ext
-            dest = os.path.join(export_path, new_name)
-            shutil.copy(src, dest)
-            renamed.append((file, new_name, dest))
-    else:
-        print("No new images to rename.")
+                logger.info(f"Skipping file (already logged in CSV): {file}")
+                skipped_logged_count += 1
 
-    return renamed
+        print_success("Download and filtering complete.")
+        logger.info("Download and filtering complete.")
+        if files_to_process:
+            print_info(f"Identified {len(files_to_process)} file(s) needing processing (rename/upload).")
+            logger.info(f"{len(files_to_process)} file(s) identified for processing.")
+        else:
+            print_info("No new files found requiring processing.")
+            logger.info("No new files identified for processing.")
+        if skipped_logged_count > 0:
+            print_info(f"Skipped {skipped_logged_count} file(s) already present in the log.")
+
+        return files_to_process
+
+    except Exception as e:
+        print_error(f"An error occurred during download/filtering: {e}", log_exception=True)
+        print_info("Check the Google Drive ID/URL, folder permissions, and network connection.")
+        pause()
+        return []
+
+
+def prompt_rename_images(import_path, export_path, files_to_process):
+    """Prompts user to rename downloaded files and copies them to export path."""
+    if not files_to_process:
+        print_info("No files require renaming.")
+        logger.info("Skipping rename step: No files to process.")
+        return []
+
+    clear_screen()
+    print_title("Rename New Files")
+    logger.info(f"Starting rename process for {len(files_to_process)} file(s).")
+    os.makedirs(export_path, exist_ok=True)
+    renamed_list = [] # List of tuples: (original_name, new_name, export_file_path)
+
+    print_info(f"Found {len(files_to_process)} file(s) to rename.")
+    print_info("Enter a new name without the extension.")
+    print_info("Leave blank and press Enter to keep the original filename.")
+
+    skipped_count = 0
+    renamed_count = 0
+    # Sort files for consistent processing order
+    for original_filename in sorted(files_to_process):
+        src_path = os.path.join(import_path, original_filename)
+        if not os.path.isfile(src_path):
+            print_warning(f"Source file not found, skipping: {original_filename}")
+            logger.warning(f"Rename skipped: Source file not found at '{src_path}'.")
+            skipped_count += 1
+            continue
+
+        print(f"\nOriginal filename: {C_YELLOW}{original_filename}{C_RESET}")
+        new_name_base = input("Enter new name (no extension, blank to keep original): ").strip()
+
+        _, ext = os.path.splitext(original_filename)
+        new_filename = f"{new_name_base}{ext}" if new_name_base else original_filename
+        dest_path = os.path.join(export_path, new_filename)
+        logger.info(f"Processing rename for '{original_filename}' -> '{new_filename}'.")
+
+        # Handle potential filename conflicts in export directory
+        counter = 1
+        while os.path.exists(dest_path) and dest_path != src_path:
+            print_warning(f"File '{new_filename}' already exists in export folder.")
+            logger.warning(f"Rename conflict: '{new_filename}' already exists at '{dest_path}'.")
+            overwrite_choice = input(f"Overwrite? ({C_GREEN}y{C_RESET}/{C_RED}n{C_RESET}, default n): ").strip().lower()
+            if overwrite_choice == 'y':
+                print_info(f"Overwriting existing file: {new_filename}")
+                logger.info(f"User chose to overwrite existing file '{new_filename}'.")
+                break # Proceed with overwriting
+            else:
+                 base = new_name_base if new_name_base else os.path.splitext(original_filename)[0]
+                 new_filename = f"{base}_{counter}{ext}"
+                 dest_path = os.path.join(export_path, new_filename)
+                 print_info(f"Trying new name: {new_filename}")
+                 logger.info(f"Rename conflict: Trying new name '{new_filename}'.")
+                 counter += 1
+                 if counter > 10: # Safety break
+                      print_error("Too many filename conflicts, skipping this file.")
+                      logger.error(f"Rename skipped: Too many filename conflicts for '{original_filename}'.")
+                      new_filename = None # Signal to skip
+                      break
+
+        if new_filename is None: # Skipped due to conflicts
+             skipped_count += 1
+             continue
+
+        # Copy file to export directory
+        try:
+            shutil.copy2(src_path, dest_path) # copy2 preserves metadata
+            print_success(f"Copied and renamed to: {new_filename}")
+            logger.info(f"Successfully copied '{src_path}' to '{dest_path}'.")
+            renamed_list.append((original_filename, new_filename, dest_path))
+            renamed_count += 1
+        except IOError as e:
+            print_error(f"Could not copy file '{original_filename}' to '{dest_path}': {e}", log_exception=True)
+            skipped_count += 1
+        except Exception as e: # Catch other potential errors like permissions
+            print_error(f"An unexpected error occurred during copy: {e}", log_exception=True)
+            skipped_count += 1
+
+    logger.info(f"Rename process finished. Renamed: {renamed_count}, Skipped: {skipped_count}.")
+    return renamed_list
+
 
 def upload_to_sul(file_path, api_key):
-    with open(file_path, "rb") as f:
-        files = {"file": f}
-        data = {"wizard": "true", "key": api_key}
-        res = requests.post("https://s-ul.eu/api/v1/upload", data=data, files=files)
-        res.raise_for_status()
-        return res.json()["url"]
+    """Uploads a file to s-ul.eu and returns the URL."""
+    filename = os.path.basename(file_path) # For logging/errors
+    if not api_key:
+        logger.error(f"Upload skipped for '{filename}': API key is missing.")
+        raise ValueError("S-UL API key is missing.") # Let caller handle
+    if not os.path.exists(file_path):
+         logger.error(f"Upload skipped for '{filename}': File not found at '{file_path}'.")
+         raise FileNotFoundError(f"File to upload not found: {file_path}") # Let caller handle
 
-def write_to_csv(csv_path, data):
-    write_header = not os.path.exists(csv_path)
-    with open(csv_path, "a", newline='', encoding="utf-8") as f:
-        writer = csv.writer(f)
-        if write_header:
-            writer.writerow(["Timestamp", "Original", "Renamed", "URL"])
-        for row in data:
-            # Use the datetime class within the datetime module to get the current time
-            writer.writerow([datetime.datetime.now(), row[0], row[1], row[2]])
+    print_info(f"Uploading '{filename}' to s-ul.eu...")
+    logger.info(f"Attempting upload for '{filename}' from '{file_path}'.")
+    try:
+        with open(file_path, "rb") as f:
+            files = {"file": (filename, f)} # Explicitly set filename in multipart
+            data = {"wizard": "true", "key": str(api_key)}
+            res = requests.post("https://s-ul.eu/api/v1/upload", data=data, files=files, timeout=60)
 
-def read_uploaded_files(csv_path):
+            logger.info(f"Upload request for '{filename}' completed with status code: {res.status_code}.")
+            response_json = {}
+            try:
+                 response_json = res.json()
+                 logger.debug(f"API Response JSON for '{filename}': {response_json}")
+            except requests.exceptions.JSONDecodeError:
+                 logger.warning(f"Could not decode JSON response for '{filename}'. Response text: {res.text[:200]}...")
+
+            res.raise_for_status()
+
+            if "url" in response_json:
+                url = response_json["url"]
+                print_success(f"Upload successful: {url}")
+                logger.info(f"Upload successful for '{filename}'. URL: {url}")
+                return url
+            else:
+                error_msg = response_json.get("error", "Unknown error from API (URL missing in 200 OK response)")
+                logger.error(f"API Error for '{filename}': {error_msg}")
+                raise requests.exceptions.RequestException(f"API Error: {error_msg}")
+
+    except requests.exceptions.Timeout:
+        print_error(f"Upload timed out for '{filename}'.")
+        return None
+    except requests.exceptions.ConnectionError as e:
+         print_error(f"Connection error during upload for '{filename}': {e}", log_exception=True)
+         return None
+    except requests.exceptions.RequestException as e:
+        print_error(f"Upload failed for '{filename}': {e}")
+        try:
+            error_detail = res.json().get('error', f'(status code: {res.status_code})')
+            logger.error(f"API Response Detail for failed upload '{filename}': {error_detail}")
+        except:
+            logger.error(f"Could not get error details from API response for '{filename}'. Status: {res.status_code}, Text: {res.text[:200]}...")
+        return None
+    except IOError as e:
+        print_error(f"Could not read file for upload '{filename}': {e}", log_exception=True)
+        return None
+    except Exception as e:
+        print_error(f"An unexpected error occurred during upload of '{filename}': {e}", log_exception=True)
+        return None
+
+
+def write_to_csv(csv_path, upload_data):
+    """Appends successfully uploaded file information to the CSV log."""
+    if not upload_data:
+        logger.info("No successful uploads to write to CSV.")
+        return
+
+    logger.info(f"Attempting to write {len(upload_data)} new entries to CSV: '{csv_path}'.")
+    header = ["Timestamp", "Original", "Renamed", "URL"]
+    write_header = not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0
+    try:
+        with open(csv_path, "a", newline='', encoding="utf-8") as f:
+            writer = csv.writer(f)
+            if write_header:
+                writer.writerow(header)
+                logger.info("Writing header to new CSV file.")
+            written_count = 0
+            for timestamp, original, renamed, url in upload_data:
+                writer.writerow([timestamp, original, renamed, url])
+                written_count += 1
+        print_success(f"Successfully added {written_count} entries to '{os.path.basename(csv_path)}'.")
+        logger.info(f"Successfully wrote {written_count} entries to '{csv_path}'.")
+    except (IOError, csv.Error) as e:
+        print_error(f"Could not write to CSV file '{csv_path}': {e}", log_exception=True)
+
+def strip_ansi_codes(text):
+    """Removes ANSI escape codes from a string."""
+    # Use the compiled regex for efficiency if called often
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    return ansi_escape.sub('', text)
+
+def get_csv_data(csv_path, add_color=False):
+    """
+    Reads all data from the CSV file. Validates row length.
+    Args:
+        csv_path (str): Path to the CSV file.
+        add_color (bool): If True, adds color codes to the returned header.
+    Returns:
+        tuple: (header_list or None, data_list_of_lists)
+               Header is colored if add_color is True.
+               Returns (None, []) on error or if file not found/empty.
+    """
     if not os.path.exists(csv_path):
-        return set()
-    with open(csv_path, newline='', encoding="utf-8") as f:
-        return {row[0] for i, row in enumerate(csv.reader(f)) if i != 0}
+        return None, []
+
+    logger.debug(f"Reading CSV data from '{csv_path}', add_color={add_color}.")
+    try:
+        with open(csv_path, 'r', newline='', encoding='utf-8') as csvfile:
+            reader = csv.reader(csvfile)
+            header = next(reader, None)
+            if not header:
+                 logger.warning(f"CSV file is empty: {csv_path}")
+                 return None, []
+
+            data = list(reader)
+            num_columns = len(header)
+            validated_data = []
+            malformed_count = 0
+            for i, row in enumerate(data):
+                 if len(row) == num_columns:
+                      validated_data.append(row)
+                 else:
+                      malformed_count += 1
+                      logger.warning(f"CSV row {i+1} in '{csv_path}' has incorrect number of columns ({len(row)} instead of {num_columns}). Skipping row: {row}")
+
+            if malformed_count > 0:
+                 print_warning(f"Skipped {malformed_count} malformed row(s) in CSV. Check '{LOG_FILENAME}' for details.")
+
+            logger.debug(f"Read {len(validated_data)} valid data rows from CSV.")
+
+            # Use global color vars (C_CYAN, C_RESET) which are set based on config
+            if add_color:
+                colored_header = [f"{C_CYAN}{h}{C_RESET}" for h in header]
+                return colored_header, validated_data
+            else:
+                return header, validated_data
+
+    except (IOError, csv.Error) as e:
+        print_error(f"Could not read or parse CSV file '{csv_path}': {e}", log_exception=True)
+        return None, []
+    except StopIteration:
+        logger.info(f"CSV file '{csv_path}' contains only a header.")
+        if add_color:
+            colored_header = [f"{C_CYAN}{h}{C_RESET}" for h in header]
+            return colored_header, []
+        else:
+            return header, []
+
 
 def show_csv(csv_path):
-    while True:
-        clear_screen()
-        print("=== index.csv ===")
-        if not os.path.exists(csv_path):
-            print("No CSV data yet.")
-        else:
-            with open(csv_path, encoding="utf-8") as f:
-                table = list(csv.reader(f))
-            if table:
-                print("\n" + tabulate(table[1:], headers=table[0], tablefmt="grid"))
-            else:
-                print("CSV file is empty.")
+    """Displays the contents of the CSV log file using fancy_grid."""
+    clear_screen()
+    print_title("CSV Log Data (index.csv)")
+    logger.info("Displaying CSV data.")
 
-        print("\n0. Back to Main Menu")
-        choice = input("> ").strip()
+    header, data = get_csv_data(csv_path, add_color=True)
 
-        if choice == '0':
-            clear_screen()
-            break
-        else:
-            print("[ERROR] Invalid choice. Press Enter to try again...")
-            input()
+    if header is None:
+        pass
+    elif not data:
+        print_info("CSV file is empty or contains only a header.")
+        if header:
+             print(tabulate([], headers=header, tablefmt="fancy_grid"))
+    else:
+        print(tabulate(data, headers=header, tablefmt="fancy_grid"))
+
+    pause("Press Enter to return to the main menu...")
+
 
 def rename_existing_item(csv_path, base_dir, config):
+    """Allows renaming an item already logged in the CSV and optionally re-uploading."""
+    api_key = config.get('api_key')
+    export_path_base = os.path.join(base_dir, EXPORT_FOLDER)
+    logger.info("Entered rename item menu.")
+
     while True:
         clear_screen()
-        if not os.path.exists(csv_path):
-            print("[ERROR] CSV file not found.")
-            input("Press Enter to return to the main menu...")
-            clear_screen()  # Clear screen before returning
+        print_title("Rename Logged Item")
+
+        header_colored, data = get_csv_data(csv_path, add_color=True)
+
+        if header_colored is None:
+            pause()
+            return
+        if not data:
+            print_info("No entries found in the CSV log.")
+            logger.info("No CSV entries found to rename.")
+            pause()
             return
 
-        with open(csv_path, 'r', newline='', encoding='utf-8') as csvfile:
-            reader = list(csv.DictReader(csvfile))
+        display_header = [f"{C_CYAN}#{C_RESET}"] + header_colored
+        display_data = [[idx + 1] + row for idx, row in enumerate(data)]
 
-        if not reader:
-            print("No entries found in the CSV.")
-            input("Press Enter to return to the main menu...")
-            clear_screen()  # Clear screen before returning
-            return
-
-        print("\n=== Existing Items ===")
-        for idx, row in enumerate(reader, start=1):
-            print(f"{idx}. {row['Renamed']} (Original: {row['Original']})")
-
-        print("\n0. Back to Main Menu")
-        choice = input("\nEnter the number of the item you want to rename: ").strip()
+        print(tabulate(display_data, headers=display_header, tablefmt="fancy_grid"))
+        print(f"\n{C_YELLOW}0{C_RESET}. Back to Main Menu")
+        choice = input(f"Enter the number ({C_YELLOW}#{C_RESET}) of the item to rename (or 0 to exit): ").strip()
 
         if choice == '0':
-            clear_screen()  # Clear screen before breaking out of the loop
+            logger.info("Exited rename item menu.")
             break
 
         try:
-            item_number = int(choice) - 1
-            if item_number < 0 or item_number >= len(reader):
-                print("[ERROR] Invalid choice.")
-                input("Press Enter to try again...")
-                continue
+            item_index = int(choice) - 1
+            if not 0 <= item_index < len(data):
+                raise ValueError("Index out of range.")
         except ValueError:
-            print("Please enter a valid number.")
-            input("Press Enter to try again...")
+            print_error("Invalid number.")
+            logger.warning(f"Invalid rename choice: {choice}")
+            pause("Press Enter to try again...")
             continue
 
-        selected_row = reader[item_number]
-        old_name = selected_row['Renamed']
-        original_name = selected_row['Original']
-        old_url = selected_row['URL']
-        _, ext = os.path.splitext(old_name)
-
-        new_name_input = input(f"Enter the new name for '{old_name}' (without extension): ").strip()
-        if not new_name_input:
-            print("Name cannot be empty.")
-            input("Press Enter to try again...")
-            continue
-
-        new_name = f"{new_name_input}{ext}"
-
-        old_path = os.path.join(base_dir, "Images export", old_name)
-        new_path = os.path.join(base_dir, "Images export", new_name)
-
-        renamed_success = False
+        selected_row = data[item_index]
         try:
-            if os.path.exists(old_path):
-                os.rename(old_path, new_path)
-                renamed_success = True
-            else:
-                print(f"[ERROR] File not found: {old_path}")
-                input("Press Enter to continue...")
-                continue
-        except Exception as e:
-            print(f"[ERROR] Failed to rename file: {e}")
-            input("Press Enter to continue...")
+             if len(selected_row) >= 4:
+                 timestamp, original_name, old_renamed_name, old_url = selected_row[:4]
+                 logger.info(f"Attempting to rename item #{item_index+1}: '{old_renamed_name}' (Original: '{original_name}')")
+             else:
+                 raise ValueError("Row does not have enough columns.")
+        except ValueError as e:
+             print_error(f"CSV row has unexpected format ({e}). Cannot proceed.")
+             pause()
+             continue
+
+        print(f"\nSelected item: {old_renamed_name} (Original: {original_name})")
+        _, ext = os.path.splitext(old_renamed_name)
+        new_name_base = input(f"Enter the new name for '{old_renamed_name}' (without extension): ").strip()
+
+        if not new_name_base:
+            print_warning("New name cannot be empty.")
+            pause("Press Enter to try again...")
             continue
 
-        if renamed_success:
-            # Update the row
-            reader[item_number]['Renamed'] = new_name
+        new_renamed_name = f"{new_name_base}{ext}"
+        old_export_path = os.path.join(export_path_base, old_renamed_name)
+        new_export_path = os.path.join(export_path_base, new_renamed_name)
+        logger.info(f"User provided new name: '{new_renamed_name}'. Old path: '{old_export_path}', New path: '{new_export_path}'")
 
-            print("[WARNING] First manually delete the already uploaded file before re-uploading! Else the original URL will return without changes to it's name.")
-            print("[WARNING] Uploaded files cannot be renamed in s-ul frontend.")
-            reupload = input("Do you want to re-upload this file? (y/n): ").strip().lower()
-            if reupload == 'y':
+        if new_renamed_name != old_renamed_name and os.path.exists(new_export_path):
+            print_error(f"A file named '{new_renamed_name}' already exists in '{EXPORT_FOLDER}'.")
+            logger.warning(f"Rename conflict: Target file '{new_export_path}' already exists.")
+            print_info("Please choose a different name or manually resolve the conflict.")
+            pause()
+            continue
+
+        renamed_locally = False
+        local_rename_skipped = False
+        if os.path.exists(old_export_path):
+            if new_renamed_name != old_renamed_name:
                 try:
-                    url = upload_to_sul(new_path, config['api_key'])
-                    reader[item_number]['URL'] = url
-                    print(f"[OK] File re-uploaded. New URL: {url}")
-                except requests.exceptions.RequestException as e:
-                    print(f"[ERROR] re-upload failed: {e}")
-                except KeyError:
-                    print("[ERROR] Could not retrieve upload URL.")
-            elif reupload == 'n':
-                print("[OK] Skipping re-upload.")
+                    os.rename(old_export_path, new_export_path)
+                    print_success(f"Renamed local file to '{new_renamed_name}'")
+                    renamed_locally = True
+                except OSError as e:
+                    print_error(f"Failed to rename local file: {e}", log_exception=True)
+                    pause()
+                    continue
             else:
-                print("[ERROR] Invalid choice. Skipping re-upload.")
+                 print_info("New name is the same as the old name. Skipping local file rename.")
+                 logger.info("New name is same as old, skipping local file rename.")
+                 renamed_locally = True
+                 local_rename_skipped = True
+        else:
+            print_warning(f"Original renamed file '{old_renamed_name}' not found in '{EXPORT_FOLDER}'.")
+            logger.warning(f"Local file '{old_export_path}' not found for renaming.")
+            print_info("CSV entry will be updated, but no local file was renamed.")
+            renamed_locally = True
 
-            # Save back to CSV
+        reupload_url = old_url
+        if renamed_locally:
+            if not local_rename_skipped or not os.path.exists(old_export_path):
+                print_warning("Manually delete the old file on s-ul.eu if you want to replace it.")
+                reupload_choice = input(f"Re-upload '{new_renamed_name}' to s-ul.eu? ({C_GREEN}y{C_RESET}/{C_RED}n{C_RESET}): ").strip().lower()
+                if reupload_choice == 'y':
+                    logger.info(f"User chose to re-upload '{new_renamed_name}'.")
+                    if not api_key:
+                         print_error("Cannot re-upload: S-UL API key is missing in config.")
+                    elif not os.path.exists(new_export_path):
+                         print_error(f"Cannot re-upload: File '{new_renamed_name}' not found at '{new_export_path}'.")
+                    else:
+                        try:
+                            new_url = upload_to_sul(new_export_path, api_key)
+                            if new_url:
+                                reupload_url = new_url
+                            else:
+                                print_warning("Re-upload failed. Keeping the old URL in the log.")
+                        except (FileNotFoundError, ValueError) as e:
+                             print_error(f"Re-upload pre-check failed: {e}")
+                        except Exception as e:
+                             print_error(f"An unexpected error occurred during re-upload: {e}", log_exception=True)
+                else:
+                     print_info("Skipping re-upload. Keeping the old URL in the log.")
+                     logger.info(f"User chose not to re-upload '{new_renamed_name}'.")
+            else:
+                 print_info("Skipping re-upload prompt as filename did not change.")
+                 logger.info("Skipping re-upload prompt as filename did not change.")
+
+        data[item_index][2] = new_renamed_name
+        data[item_index][3] = reupload_url
+        new_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+        data[item_index][0] = new_timestamp
+
+        try:
+            header_clean, _ = get_csv_data(csv_path, add_color=False)
+            if header_clean is None:
+                 header_clean = ["Timestamp", "Original", "Renamed", "URL"]
+                 print_warning("Could not reread original header, using default for saving.")
+
             with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
-                fieldnames = reader[0].keys()
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(reader)
+                writer = csv.writer(csvfile)
+                writer.writerow(header_clean)
+                writer.writerows(data)
+            print_success("CSV log updated successfully.")
+            logger.info(f"CSV log updated successfully after renaming item #{item_index+1} to '{new_renamed_name}'.")
+        except (IOError, csv.Error) as e:
+            print_error(f"Failed to save updated CSV: {e}", log_exception=True)
+            if renamed_locally and os.path.exists(new_export_path) and new_export_path != old_export_path:
+                 print_warning("Local file was renamed, but CSV update failed. You may need to manually revert the rename or fix the CSV.")
+            elif not renamed_locally:
+                 print_warning("CSV update failed.")
 
-            print("[OK] File renamed and CSV updated.")
-            input("Press Enter to continue renaming or enter and then 0 to go back...")
+        pause("Press Enter to rename another item or 0 to return...")
+
 
 def delete_entry(csv_path, base_dir):
+    """Deletes an entry from the CSV and optionally the corresponding local files."""
+    export_path_base = os.path.join(base_dir, EXPORT_FOLDER)
+    import_path_base = os.path.join(base_dir, IMPORT_FOLDER)
+    logger.info("Entered delete item menu.")
+
     while True:
         clear_screen()
-        print("=== Delete file ===")
-        print("[WARNING] Deleting items here only removes them locally and NOT on s-ul.eu.")
-        if not os.path.exists(csv_path):
-            print("[ERROR] CSV file not found.")
-            input("Press Enter to return to the main menu...")
-            clear_screen()  # Clear screen before returning
+        print_title("Delete Logged Item")
+        print_warning("This only removes the entry from the log and local files.")
+        print_warning(f"{C_RED}It does NOT delete the file from s-ul.eu.{C_RESET}")
+
+        header_colored, data = get_csv_data(csv_path, add_color=True)
+
+        if header_colored is None:
+            pause()
+            return
+        if not data:
+            print_info("No entries found in the CSV log to delete.")
+            logger.info("No CSV entries found to delete.")
+            pause()
             return
 
-        with open(csv_path, newline='', encoding="utf-8") as f:
-            rows = list(csv.reader(f))
+        display_header = [f"{C_CYAN}#{C_RESET}"] + header_colored
+        display_data = [[idx + 1] + row for idx, row in enumerate(data)]
 
-        if len(rows) <= 1:
-            print("[ERROR] No entries found in the CSV to delete.")
-            input("Press Enter to return to the main menu...")
-            clear_screen()  # Clear screen before returning
-            return
-
-        print("\n=== Existing Items ===")
-        for idx, row in enumerate(rows[1:], 1):
-            print(f"{idx}. {row[2]}")
-
-        print("\n0. Back to Main Menu")
-        choice = input("Which entry to delete (number): ").strip()
+        print(tabulate(display_data, headers=display_header, tablefmt="fancy_grid"))
+        print(f"\n{C_YELLOW}0{C_RESET}. Back to Main Menu")
+        choice = input(f"Enter the number ({C_YELLOW}#{C_RESET}) of the item to delete (or 0 to exit): ").strip()
 
         if choice == '0':
-            clear_screen()  # Clear screen before breaking out of the loop
+            logger.info("Exited delete item menu.")
             break
 
         try:
-            i = int(choice)
-            if 1 <= i < len(rows):
-                removed = rows.pop(i)
-                print(f"[OK] Removed: {removed[2]} from the CSV.")
-                for folder in ["Images import", "Images export"]:
-                    path = os.path.join(base_dir, folder, removed[2])
-                    if os.path.exists(path):
-                        try:
-                            os.remove(path)
-                            print(f"[OK] Deleted local file: {path}")
-                        except Exception as e:
-                            print(f"[ERROR] failed to delete local file {path}: {e}")
-                with open(csv_path, "w", newline='', encoding="utf-8") as f:
-                    writer = csv.writer(f)
-                    writer.writerows(rows)
-                input("Press Enter to continue deleting or enter and then 0 to go back...")
-            else:
-                print("[ERROR] Invalid choice.")
-                input("Press Enter to try again...")
+            item_index = int(choice) - 1
+            if not 0 <= item_index < len(data):
+                raise ValueError("Index out of range.")
         except ValueError:
-            print("[ERROR] Invalid input.")
-            input("Press Enter to try again...")
+            print_error("Invalid number.")
+            logger.warning(f"Invalid delete choice: {choice}")
+            pause("Press Enter to try again...")
+            continue
+
+        removed_row = data.pop(item_index)
+        original_name = None
+        renamed_name = None
+        try:
+             if len(removed_row) >= 4:
+                 timestamp, original_name, renamed_name, url = removed_row[:4]
+                 print_success(f"Removed entry for '{renamed_name}' (Original: {original_name}) from log.")
+                 logger.info(f"Removed item #{item_index+1} ('{renamed_name}', Original: '{original_name}') from in-memory list.")
+             else:
+                 raise ValueError("Row does not have enough columns.")
+        except ValueError as e:
+             print_error(f"Removed row had unexpected format ({e}). Cannot reliably delete local files.")
+             logger.error(f"Removed row #{item_index+1} had unexpected format: {removed_row}. Cannot determine filenames for local deletion.")
+
+        delete_files_choice = input(f"Delete corresponding local files (Import/Export)? ({C_GREEN}y{C_RESET}/{C_RED}n{C_RESET}): ").strip().lower()
+        if delete_files_choice == 'y':
+            logger.info(f"User chose to delete local files for removed item #{item_index+1}.")
+            files_to_delete = []
+            if renamed_name:
+                 files_to_delete.append(os.path.join(export_path_base, renamed_name))
+            if original_name:
+                 files_to_delete.append(os.path.join(import_path_base, original_name))
+
+            if not files_to_delete:
+                 print_info("Could not determine filenames to delete.")
+                 logger.warning("Could not determine local filenames to delete based on removed row.")
+            else:
+                deleted_count = 0
+                for file_path in files_to_delete:
+                     logger.info(f"Attempting to delete local file: {file_path}")
+                     if os.path.exists(file_path):
+                         try:
+                             os.remove(file_path)
+                             print_success(f"Deleted local file: {file_path}")
+                             deleted_count += 1
+                         except OSError as e:
+                             print_error(f"Failed to delete local file {file_path}: {e}", log_exception=True)
+                     else:
+                        print_info(f"Local file not found, skipping: {file_path}")
+                        logger.info(f"Local file not found for deletion, skipping: {file_path}")
+
+                if deleted_count == 0 and files_to_delete:
+                     print_info("No corresponding local files were found to delete.")
+                     logger.info("No corresponding local files found for deletion.")
+                elif deleted_count > 0:
+                     logger.info(f"Deleted {deleted_count} local file(s).")
+        else:
+            logger.info(f"User chose not to delete local files for removed item #{item_index+1}.")
+
+        try:
+            header_clean, _ = get_csv_data(csv_path, add_color=False)
+            if header_clean is None:
+                 header_clean = ["Timestamp", "Original", "Renamed", "URL"]
+                 print_warning("Could not reread original header, using default for saving.")
+
+            with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(header_clean)
+                writer.writerows(data)
+            print_success("CSV log updated successfully.")
+            logger.info(f"CSV log updated successfully after deleting item #{item_index+1}.")
+        except (IOError, csv.Error) as e:
+            print_error(f"Failed to save updated CSV: {e}", log_exception=True)
+            print_warning("Log entry was removed in this session, but failed to save to disk.")
+
+        pause("Press Enter to delete another item or 0 to return...")
+
 
 def start_script(config):
-    base_dir = config["base_dir"]
-    import_path = os.path.join(base_dir, "Images import")
-    export_path = os.path.join(base_dir, "Images export")
-    csv_path = os.path.join(base_dir, "index.csv")
+    """Main workflow: download, rename, upload, log."""
+    clear_screen()
+    print_title("Start Processing Files")
+    logger.info("Starting main script execution (Option 4).")
+    base_dir = config.get("base_dir")
+    drive_id = config.get("drive_id")
+    api_key = config.get("api_key")
 
-    os.makedirs(import_path, exist_ok=True)
-    newly_downloaded_files = download_drive_folder(config["drive_id"], import_path, csv_path)
-    uploaded = read_uploaded_files(csv_path)
-    files_to_rename = list(newly_downloaded_files) + [
-        f for f in os.listdir(import_path)
-        if f not in uploaded and os.path.isfile(os.path.join(import_path, f))
-    ]
+    if not base_dir:
+         print_error("Base directory is not set in configuration.")
+         pause()
+         return
+    if not drive_id:
+         print_error("Google Drive ID/URL is not set in configuration.")
+         pause()
+         return
+    if not api_key:
+         print_warning("S-UL API key is not set. Uploading will be skipped.")
 
-    if files_to_rename:
-        renamed = prompt_rename_images(import_path, export_path, uploaded, csv_path, newly_downloaded_files)
+    import_path = os.path.join(base_dir, IMPORT_FOLDER)
+    export_path = os.path.join(base_dir, EXPORT_FOLDER)
+    csv_path = os.path.join(base_dir, CSV_FILENAME)
 
-        new_rows = []
-        for original, new_name, path in renamed:
-            url = upload_to_sul(path, config["api_key"])
-            new_rows.append((original, new_name, url))
-            print(f"Uploaded: {url}")
+    try:
+        os.makedirs(import_path, exist_ok=True)
+        os.makedirs(export_path, exist_ok=True)
+        logger.debug(f"Ensured import/export directories exist: '{import_path}', '{export_path}'")
+    except OSError as e:
+        print_error(f"Could not create required directories: {e}", log_exception=True)
+        pause()
+        return
 
-        write_to_csv(csv_path, new_rows)
-        input("\nPress Enter to return to the main menu...")
-        clear_screen()
+    files_to_process = download_drive_folder(drive_id, import_path, csv_path)
+
+    if not files_to_process:
+        logger.info("No files identified for processing after download step.")
+        pause()
+        return
+
+    renamed_files_info = prompt_rename_images(import_path, export_path, files_to_process)
+
+    if not renamed_files_info:
+        logger.info("No files were renamed or copied to export folder.")
+        pause()
+        return
+
+    successful_uploads = []
+    if not api_key:
+         print_warning("Skipping upload step as API key is not configured.")
+         logger.warning("Skipping upload step: API key not configured.")
     else:
-        input("\nNo new files to download or rename. Press Enter to return to the main menu...")
         clear_screen()
+        print_title("Uploading Files")
+        logger.info(f"Starting upload process for {len(renamed_files_info)} file(s).")
+        upload_count = 0
+        total_files = len(renamed_files_info)
+        failed_uploads = 0
+        for original_name, new_name, file_to_upload_path in renamed_files_info:
+            upload_count += 1
+            print(f"\n--- Uploading file {upload_count} of {total_files} ---")
+            try:
+                url = upload_to_sul(file_to_upload_path, api_key)
+                if url:
+                    successful_uploads.append((datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"), original_name, new_name, url))
+                else:
+                    print_warning(f"Skipping logging for failed upload: {new_name}")
+                    failed_uploads += 1
+            except (FileNotFoundError, ValueError) as e:
+                 print_error(f"Cannot upload {new_name}: {e}")
+                 failed_uploads += 1
+            except Exception as e:
+                 print_error(f"Unexpected error uploading {new_name}: {e}", log_exception=True)
+                 failed_uploads += 1
+        logger.info(f"Upload process finished. Successful: {len(successful_uploads)}, Failed: {failed_uploads}.")
+
+    if successful_uploads:
+        write_to_csv(csv_path, successful_uploads)
+    elif api_key:
+        print_info("No files were successfully uploaded.")
+        logger.info("No files were successfully uploaded in this run.")
+
+    print_info("\nProcessing complete.")
+    logger.info("Main script execution (Option 4) finished.")
+    pause()
+
+
+# --- Informational / Destructive Actions ---
 
 def get_folder_tree_with_sizes(folder_path):
+    """Generates a list of tuples (item_path, size_readable) for a folder tree."""
+    logger.debug(f"Generating folder tree for: {folder_path}")
     tree_data = []
-    total_size = 0
 
     def get_size(path):
+        """Safely gets size of a file."""
         try:
-            return os.path.getsize(path)
-        except OSError:
+            if os.path.isfile(path):
+                return os.path.getsize(path)
+            return 0
+        except OSError as e:
+            logger.warning(f"Could not get size for '{path}': {e}")
             return 0
 
+    def format_size(size_bytes):
+        """Formats bytes into a human-readable string."""
+        if size_bytes < 0: return "N/A"
+        if size_bytes < 1024:
+            return f"{size_bytes} B"
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB', 'PB']:
+            if size_bytes < 1024.0:
+                return f"{size_bytes:.2f} {unit}"
+            size_bytes /= 1024.0
+        return f"{size_bytes:.2f} PB"
+
     def build_tree(directory, prefix=""):
-        nonlocal total_size
-        items = os.listdir(directory)
+        """Recursively builds the tree structure."""
+        try:
+            items = sorted(os.listdir(directory))
+        except OSError as e:
+             logger.warning(f"Cannot list directory '{directory}': {e}")
+             items = []
+
         num_items = len(items)
         for i, item in enumerate(items):
             path = os.path.join(directory, item)
             is_last = i == num_items - 1
             indicator = "└── " if is_last else "├── "
-            size_bytes = get_size(path)
-            size_readable = format_size(size_bytes)
-            tree_data.append((prefix + indicator + item, size_readable))
-            total_size += size_bytes
-            if os.path.isdir(path):
-                build_tree(path, prefix + ("    " if is_last else "│   "))
+            connector = "    " if is_last else "│   "
 
-    def format_size(bytes):
-        if bytes == 0:
-            return "0 B"
-        units = ['B', 'KB', 'MB', 'GB', 'TB']
-        i = 0
-        while bytes >= 1024 and i < len(units) - 1:
-            bytes /= 1024
-            i += 1
-        return f"{bytes:.2f} {units[i]}"
+            try:
+                is_dir = os.path.isdir(path)
+                is_file = os.path.isfile(path)
+            except OSError as e:
+                is_dir = False
+                is_file = False
+                logger.warning(f"Cannot access item type '{path}': {e}")
 
-    # Add the root directory with its total size first
-    root_size = sum(get_size(os.path.join(folder_path, item)) for item in os.listdir(folder_path))
-    tree_data.append((os.path.abspath(folder_path), format_size(root_size)))
+            if is_dir:
+                # Use global color var C_BLUE
+                item_display = f"{C_BLUE}{item}{C_RESET}"
+                size_readable = "<DIR>"
+                tree_data.append((prefix + indicator + item_display, size_readable))
+                new_prefix = prefix + connector
+                build_tree(path, new_prefix)
+            elif is_file:
+                 size_bytes = get_size(path)
+                 size_readable = format_size(size_bytes)
+                 tree_data.append((prefix + indicator + item, size_readable))
+
+    root_total_bytes = 0
+    try:
+        for dirpath, dirnames, filenames in os.walk(folder_path):
+             for f in filenames:
+                  fp = os.path.join(dirpath, f)
+                  if os.path.isfile(fp) and not os.path.islink(fp):
+                       root_total_bytes += get_size(fp)
+    except OSError as e:
+         logger.error(f"Could not traverse directory '{folder_path}' for size calculation: {e}")
+         root_total_bytes = -1
+
+    # Use global color var C_BLUE
+    root_display_name = f"{C_BLUE}{os.path.basename(folder_path)}{C_RESET}"
+    tree_data.append((root_display_name, format_size(root_total_bytes)))
     build_tree(folder_path)
+    logger.debug(f"Folder tree generation complete for: {folder_path}")
     return tree_data
 
+
 def show_folder_structure(config):
-    base_dir = config['base_dir']
-    while True:
-        clear_screen()
-        print("=== Folder Structure ===")
+    """Displays the folder structure of the base directory."""
+    logger.info("Displaying folder structure.")
+    base_dir = config.get('base_dir')
+    if not base_dir or not os.path.isdir(base_dir):
+        print_error("Base directory is not set or invalid.")
+        pause()
+        return
+
+    clear_screen()
+    abs_base_dir = os.path.abspath(base_dir)
+    print_title(f"Folder Structure ({abs_base_dir})")
+    try:
         folder_tree = get_folder_tree_with_sizes(base_dir)
-        headers = ["Name", "Size"]
+        # Use global color vars C_CYAN, C_RESET
+        headers = [f"{C_CYAN}Name{C_RESET}", f"{C_CYAN}Size{C_RESET}"]
         print(tabulate(folder_tree, headers=headers, tablefmt="plain"))
-        print("\nPress Enter to return to the main menu...")
-        input()
-        clear_screen()
-        break
+    except Exception as e:
+        print_error(f"Could not generate folder structure: {e}", log_exception=True)
+
+    pause("Press Enter to return to the main menu...")
+
 
 def nuke_everything(base_dir):
+    """Deletes the entire base directory after double confirmation."""
     clear_screen()
-    print("=== Nuke Everything ===")
-    print(f"[WARNING] This action will PERMANENTLY delete the following folder and all its contents:")
-    print(f"- Folder: {base_dir}")
+    print_title("Nuke Everything")
+    logger.warning("NUKE EVERYTHING option selected.")
+    # Use global color var C_RED
+    print(f"{C_RED}=== WARNING: DESTRUCTIVE ACTION ==={C_RESET}")
+    print_warning("This action will PERMANENTLY delete the script's")
+    print_warning(f"working folder and ALL its contents:")
+    abs_base_dir = os.path.abspath(base_dir)
+    # Use global color var C_YELLOW
+    print(f"\nFolder to be deleted: {C_YELLOW}{abs_base_dir}{C_RESET}\n")
+    logger.warning(f"Target folder for nuke: {abs_base_dir}")
 
-    confirmation = input("Are you sure? Type 'yes' to confirm: ").strip()
-    if confirmation == 'yes':
-        confirmation2 = input("Type 'yes' again to to proceed with deleting '{base_dir}': ").strip()
-        if confirmation2 == 'yes':
-            print("\nInitiating nuking sequence...")
+    if not os.path.isdir(abs_base_dir):
+        print_error(f"The specified base directory does not exist: {abs_base_dir}")
+        pause()
+        return
+
+    # Use global color vars
+    confirm1 = input(f"Are you ABSOLUTELY sure? Type '{C_YELLOW}yes{C_RESET}' to confirm: ").strip().lower()
+    if confirm1 == 'yes':
+        logger.info("Nuke first confirmation successful.")
+        folder_name = os.path.basename(abs_base_dir)
+        confirm2 = input(f"Type '{C_YELLOW}yes{C_RESET}' again to PERMANENTLY delete '{C_YELLOW}{folder_name}{C_RESET}': ").strip().lower()
+        if confirm2 == 'yes':
+            logger.warning(f"NUKE SECOND CONFIRMATION SUCCESSFUL. Proceeding with deletion of '{abs_base_dir}'.")
+            print(f"\n{C_RED}[NUKE INITIATED]{C_RESET} Deleting folder '{abs_base_dir}'...")
             try:
-                parent_dir = os.path.dirname(base_dir)
-                folder_to_delete = base_dir
-
-                if os.path.exists(folder_to_delete):
-                    shutil.rmtree(folder_to_delete)
-                    print(f"Deleted folder: {folder_to_delete}")
-                else:
-                    print(f"Folder not found: {folder_to_delete}")
-                print("\nNuking complete. The program's working folder and its contents have been deleted.")
-                exit()
+                shutil.rmtree(abs_base_dir)
+                print_success(f"Successfully deleted folder: {abs_base_dir}")
+                logger.warning(f"NUKE SUCCESSFUL: Deleted folder '{abs_base_dir}'. Exiting program.")
+                print_info("Exiting program as its working directory is gone.")
+                pause("Press Enter to exit.")
+                sys.exit(0)
             except Exception as e:
-                print(f"\nP[ERROR] Nuking has failed: {e}")
+                print_error(f"Nuking FAILED: {e}", log_exception=True)
+                print_info("Some files or folders might still remain.")
+                logger.critical(f"NUKE FAILED for '{abs_base_dir}': {e}", exc_info=True)
         else:
-            print("\nNuking aborted.")
+            print_info("Nuking aborted (second confirmation was not 'yes').")
+            logger.info("Nuke aborted by user (second confirmation failed).")
     else:
-        print("\n Nuking aborted.")
-    input("\nPress Enter to return to the main menu...")
-    clear_screen()
+        print_info("Nuking aborted (first confirmation was not 'yes').")
+        logger.info("Nuke aborted by user (first confirmation failed).")
+
+    pause()
+
 
 def show_explanation():
+    """Displays an explanation of the program."""
     clear_screen()
-    print("=== How This Program Works ===")
-    print("\nThis tool automates fetching, renaming, and uploading images to s-ul.eu.")
-    print("Here's how the menu options correspond to the program's steps and data:\n")
+    print_title("How This Program Works")
+    logger.info("Displaying explanation.")
+    print("This tool automates fetching, renaming, and uploading images to s-ul.eu.")
+    print("It keeps track of processed files in 'index.csv'.\n")
 
-    print("0. How this program works:")
-    print("   └── Displays this detailed explanation of the program's")
-    print("       features and workflow.")
+    # Use global color vars
+    explanation = [
+        (f"{C_YELLOW}0{C_RESET}. How this works", "Displays this explanation."),
+        (f"{C_YELLOW}1{C_RESET}. Show CSV data", "Shows the log of processed files ('index.csv')."),
+        (f"{C_YELLOW}2{C_RESET}. Show folder structure", "Displays files/folders in the script's directory."),
+        (f"{C_YELLOW}3{C_RESET}. Change settings", "Update Drive ID, API key, base folder, colors, logging."),
+        (f"{C_YELLOW}4{C_RESET}. Start script", "Runs the main process: Download > Filter > Rename > Upload > Log."),
+        (f"{C_YELLOW}5{C_RESET}. Rename item", "Renames a logged file locally and in the CSV, allows re-upload."),
+        (f"{C_YELLOW}6{C_RESET}. Delete item", f"Removes an entry from CSV and deletes local files ({C_RED}not from s-ul.eu{C_RESET})."),
+        (f"{C_YELLOW}7{C_RESET}. {C_RED}Nuke{C_RESET}", f"[{C_RED}DANGER{C_RESET}] Deletes the entire working folder after confirmation."),
+        (f"{C_YELLOW}8{C_RESET}. Exit", "Terminates the program.")
+    ]
 
-    print("1. Show CSV data:")
-    print("   └── Data Display:")
-    print("       └── Presents the contents of the 'index.csv' file, showing")
-    print("           the logged information.")
+    print(tabulate(explanation, headers=[f"{C_CYAN}Option{C_RESET}", f"{C_CYAN}Description{C_RESET}"], tablefmt="fancy_grid"))
 
-    print("2. Show folder structure:")
-    print("   └── System Information:")
-    print("       └── Displays a tree-like view of the script's working")
-    print("           directory, including file sizes.")
+    print("\nKey Folders:")
+    print(f"- '{IMPORT_FOLDER}': Where files are downloaded from Google Drive.")
+    print(f"- '{EXPORT_FOLDER}': Where renamed files are stored before/after upload.")
+    print("\nKey Files:")
+    print(f"- '{CONFIG_FILE}': Stores your settings.")
+    print(f"- '{CSV_FILENAME}': Logs successfully processed files.")
+    print(f"- '{LOG_FILENAME}': Detailed log of script activity (if enabled).")
 
-    print("3. Change settings:")
-    print("   └── Configuration:")
-    print("       ├── Google Drive ID/URL:")
-    print("       │   └── The source of the images to download.")
-    print("       ├── s-ul.eu API key:")
-    print("       │   └── Your authentication key for uploading.")
-    print("       └── Base folder:")
-    print("           └── The main directory where the script operates and")
-    print("               stores its files and configuration.")
+    print("\nFor the latest version and more information, visit:")
+    print(f"{C_CYAN}https://github.com/spodai/stuff/blob/main/team_banners.py{C_RESET}")
 
-    print("4. Start script:")
-    print("   ├── Downloading:")
-    print("   │   └── Fetches new files from the configured Google Drive")
-    print("   │       folder ('Images import'), skipping existing ones.")
-    print("   ├── Renaming:")
-    print("   │   └── Prompts you to rename the newly downloaded files")
-    print("   │       ('Images export').")
-    print("   ├── Uploading:")
-    print("   │   └── Uploads the renamed files to s-ul.eu.")
-    print("   └── Logging:")
-    print("       └── Records the original name, new name, and s-ul.eu URL")
-    print("           in 'index.csv'.")
+    pause("Press Enter to return to the main menu...")
 
-    print("5. Rename item:")
-    print("   └── Local File and 'index.csv' Management:")
-    print("       ├── Renames a local image file in 'Images export'.")
-    print("       ├── Updates the corresponding entry in 'index.csv'.")
-    print("       └── Offers the option to re-upload the renamed file.")
-
-    print("6. Delete item:")
-    print("   └── 'index.csv' Management:")
-    print("       ├── Removes a specific entry from the log file.")
-    print("       └── Deletes the corresponding local image files (Import and Export folders).")
-
-    print("7. Nuke:")
-    print("   └── WARNING: Deletes all downloaded and exported images,")
-    print("       the CSV log, the configuration file, and the script's")
-    print("       containing folder. Has double conformation.")
-
-    print("8. Exit:")
-    print("   └── Terminates the program.")
-
-    print("\nFor the latest version and more information, visit the repository:")
-    print("https://github.com/spodai/stuff/blob/main/team_banners.py")
-    input("\nPress Enter to return to the main menu...")
-    clear_screen()
+# --- Main Menu ---
 
 def menu():
-    init_config()
-    config = load_config()
-    base_dir = config["base_dir"]
-    csv_path = os.path.join(base_dir, "index.csv")
+    """Displays the main menu and handles user choices."""
+    init_config() # Ensures config exists, applies initial settings
+    config = load_config() # Loads config, applies saved/default settings
+    logger.info("="*30 + " Script Execution Started " + "="*30)
 
     while True:
-        print("\n=== Main Menu ===")
-        print("0. How this program works")
-        print("1. Show CSV data")
-        print("2. Show folder structure")
-        print("3. Change settings")
-        print("4. Start script")
-        print("5. Rename item")
-        print("6. Delete item")
-        print("7. Nuke")
-        print("8. Exit")
+        clear_screen()
+        try:
+             # Reload config to reflect potential changes from update_settings
+             config = load_config()
+             base_dir = config.get("base_dir", "Not Set")
+             csv_path = os.path.join(base_dir, CSV_FILENAME) if base_dir != "Not Set" else None
+             logger.debug("Main menu loop started. Config reloaded.")
+        except SystemExit:
+             return # Exit if config loading fails critically
 
-        choice = input("> ").strip()
+        print_title("Main Menu")
+        # Use global color var C_YELLOW
+        print(f"Base Directory: {C_YELLOW}{base_dir}{C_RESET}")
+        print("-" * (len("Base Directory: ") + len(str(base_dir))))
+
+        # Use global color vars
+        print(f"{C_YELLOW}0{C_RESET}. How this program works")
+        print(f"{C_YELLOW}1{C_RESET}. Show CSV data")
+        print(f"{C_YELLOW}2{C_RESET}. Show folder structure")
+        print(f"{C_YELLOW}3{C_RESET}. Change settings")
+        print(f"{C_YELLOW}4{C_RESET}. Start script (Download > Rename > Upload)")
+        print(f"{C_YELLOW}5{C_RESET}. Rename logged item")
+        print(f"{C_YELLOW}6{C_RESET}. Delete logged item")
+        print(f"{C_YELLOW}7{C_RESET}. {C_RED}Nuke working directory{C_RESET}")
+        print(f"{C_YELLOW}8{C_RESET}. Exit")
+
+        choice = input(f"\nEnter your choice ({C_YELLOW}0-8{C_RESET}): ").strip()
+        # Log choice using clean string
+        logger.info(f"User chose main menu option: {strip_ansi_codes(choice)}")
 
         if choice == "0":
             show_explanation()
         elif choice == "1":
-            show_csv(csv_path)
+            if csv_path:
+                show_csv(csv_path)
+            else:
+                print_error("Base directory not set, cannot locate CSV.")
+                pause()
         elif choice == "2":
             show_folder_structure(config)
         elif choice == "3":
             update_settings()
-            config = load_config()
+            # Config is reloaded at the start of the next loop iteration
+            # Color/logging settings are applied by load_config
         elif choice == "4":
             start_script(config)
         elif choice == "5":
-            rename_existing_item(csv_path, base_dir, config)
+             if csv_path and base_dir != "Not Set":
+                rename_existing_item(csv_path, base_dir, config)
+             else:
+                print_error("Base directory not set or CSV path invalid, cannot rename items.")
+                pause()
         elif choice == "6":
-            delete_entry(csv_path, base_dir)
+             if csv_path and base_dir != "Not Set":
+                delete_entry(csv_path, base_dir)
+             else:
+                print_error("Base directory not set or CSV path invalid, cannot delete items.")
+                pause()
         elif choice == "7":
-            nuke_everything(base_dir)
+            if base_dir != "Not Set":
+                 nuke_everything(base_dir)
+            else:
+                 print_error("Base directory not set, cannot nuke.")
+                 pause()
         elif choice == "8":
             clear_screen()
+            print_info("Exiting program.")
+            logger.info("User chose to exit.")
             break
         else:
-            print("Invalid choice.")
+            print_error("Invalid choice.")
+            logger.warning(f"Invalid main menu choice: {choice}")
+            pause("Press Enter to try again...")
 
+# --- Main Execution Block ---
 if __name__ == "__main__":
-    clear_screen()
-    import datetime
-    menu()
+    try:
+        menu()
+    except KeyboardInterrupt:
+        clear_screen()
+        # Use global color vars
+        print(f"{C_CYAN}\nOperation cancelled by user. Exiting.{C_RESET}")
+        # Logger might not be fully configured if cancelled early, but try logging
+        try:
+            logger.warning("Operation cancelled by user (KeyboardInterrupt).")
+        except Exception:
+            pass # Ignore logging errors during shutdown
+    except Exception as e:
+        # Use global color vars
+        print(f"{C_RED}\nAn unexpected critical error occurred: {e}{C_RESET}")
+        # Log the full traceback for debugging
+        try:
+            logger.critical(f"An unexpected critical error occurred: {e}", exc_info=True)
+        except Exception:
+             # If logging itself fails, print traceback to console
+             print(f"{C_RED}Traceback:{C_RESET}")
+             traceback.print_exc()
+        pause(f"{C_YELLOW}An critical error occurred. Check '{LOG_FILENAME}' if logging was enabled. Press Enter to exit.{C_RESET}")
+    finally:
+        try:
+            logger.info("="*30 + " Script Execution Finished " + "="*30 + "\n")
+        except Exception:
+            pass # Ignore logging errors during shutdown
+        # Deinitialize colorama on exit
+        if colorama:
+            colorama.deinit()
