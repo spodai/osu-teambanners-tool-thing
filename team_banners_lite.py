@@ -11,6 +11,9 @@
 # 4. Follow prompts for Google Drive ID and s-ul.eu API key on first run.
 # 5. Script will then automatically download, prompt for renames, upload (if API key exists), and log.
 
+## Note:
+# You may wanna run this in pwsh or cmd or mobaxterm or termius or whatnot, the python cli itself wasn't stable in my testings :^)
+
 ## Directory structure created by the script:
 # .
 # ├── settings.conf      (Configuration file)
