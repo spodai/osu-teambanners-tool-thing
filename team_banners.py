@@ -19,6 +19,9 @@
 # 4. Follow the prompts (Drive ID, API key, color/logging/upload preferences).
 # 5. Select desired action from the main menu.
 
+## Note:
+# You may wanna run this in pwsh or cmd or mobaxterm or termius or whatnot, the python cli itself wasn't stable in my testings :^)
+
 ## Directory structure created by the script:
 # .
 # ├── settings.conf      (Configuration file)
