@@ -1,31 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-# Lite version: Fetches from Google Drive, renames, uploads (optional), logs to CSV.
-# No menus, colors, or extra features.
-
-## Usage:
-# 1. Create a new directory (e.g., "team_banners_lite.py").
-# 2. Place this script (team_banners_lite.py) inside the new directory.
-# 3. Run the script: python team_banners_lite.py
-# 4. Follow prompts for Google Drive ID and s-ul.eu API key on first run.
-# 5. Script will then automatically download, prompt for renames, upload (if API key exists), and log.
-
-## Note:
-# You may wanna run this in pwsh or cmd or mobaxterm or termius or whatnot, the python cli itself wasn't stable in my testings :^)
-
-## Directory structure created by the script:
-# .
-# ├── settings.conf      (Configuration file)
-# ├── lite_uploader.py   (This script)
-# ├── index.csv          (Log of processed files)
-# ├── script_activity.log(Activity log file)
-# ├── Images import/     (Downloaded files from GDrive)
-# │   ├── image_01.jpg
-# │   └── ...
-# └── Images export/     (Renamed files for s-ul.eu upload)
-#     ├── TEAM1.jpg
-#     └── ...
+# Lite CLI tool: Fetches from Google Drive, renames, uploads (optional), logs to CSV.
 
 ## Install required libraries:
 # pip install requests gdown configparser
