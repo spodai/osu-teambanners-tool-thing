@@ -2,6 +2,8 @@
 
 This repository contains Python scripts for fetching images (from Google Drive or locally), renaming them, optionally uploading them to s-ul.eu, and logging the process.
 
+EVERYTHING here is made generated with Gemini, well i mean everything apart from this one line ur reading right nyow.
+
 ## Folder Structure
 
 -   **/cli**: Contains the Command Line Interface (CLI) versions of the script.
