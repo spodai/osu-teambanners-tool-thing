@@ -17,12 +17,10 @@ Requires Python 3 and necessary libraries. You can typically install them using 
 
 ```bash
 # For GUI versions (includes CLI requirements)
-pip install requests gdown configparser colorama \
-            Pillow pyperclip
+pip install requests gdown configparser colorama Pillow pyperclip
 
 # For CLI versions only
-pip install requests gdown tabulate \
-            configparser colorama
+pip install requests gdown tabulate configparser colorama
 
 
 Usage
@@ -55,4 +53,5 @@ When run, the scripts will create the following structure within their directory
 (Note: The GUI Problem Fixer creates problem_fixer.log)
 Notes
 Terminal Recommendation (CLI): For the CLI scripts, using terminals like Windows PowerShell, cmd, MobaXterm, or Termius might provide a more stable experience than the default Python IDLE shell.
-Configuration: Settings are stored in settings.conf. You can edit this file directly or use the settings menu in the full CLI/GUI
+Configuration: Settings are stored in settings.conf. You can edit this file directly or use the settings menu in the full CLI/GUI versions.
+Logging:
