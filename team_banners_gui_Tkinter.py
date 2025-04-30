@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-# GUI Version of the Google Drive to S-UL Uploader Script using Tkinter
+# GUI Version of the Google Drive to S-UL Uploader Script using Tkinter (Layout v5)
 
 ## Install required libraries:
-# pip install requests gdown tabulate configparser colorama
+# pip install requests gdown configparser colorama Pillow pyperclip
 
 import os
 import shutil
@@ -13,7 +13,6 @@ import gdown
 import csv
 import configparser
 from datetime import datetime
-from tabulate import tabulate
 import sys
 import logging
 import traceback
@@ -22,6 +21,7 @@ import threading # To prevent GUI freezing during long tasks
 import queue # For communication between threads
 import time # For small delays
 import subprocess # For opening log file cross-platform
+from pathlib import Path # For easier path handling
 
 # --- GUI Imports ---
 import tkinter as tk
@@ -29,6 +29,29 @@ from tkinter import ttk # Themed widgets
 from tkinter import messagebox
 from tkinter import simpledialog
 from tkinter import filedialog
+try:
+    # Check if Pillow is available and functional
+    from PIL import Image, ImageTk, UnidentifiedImageError
+    # Attempt a basic operation to catch potential deeper issues early
+    try:
+        Image.new('RGB', (1, 1))
+        PIL_AVAILABLE = True
+    except Exception as pil_err:
+        print(f"WARNING: Pillow installed but failed basic test ({pil_err}). Image preview disabled.")
+        PIL_AVAILABLE = False
+except ImportError:
+    PIL_AVAILABLE = False
+    # Use print for startup warnings as GUI/logging might not be ready
+    print("WARNING: Pillow library not found. Image preview will be disabled.")
+    print("Install with: pip install Pillow")
+try:
+    import pyperclip # For copying CSV data
+    PYPERCLIP_AVAILABLE = True
+except ImportError:
+    PYPERCLIP_AVAILABLE = False
+    print("WARNING: pyperclip library not found. 'Copy CSV' button will be disabled.")
+    print("Install with: pip install pyperclip")
+
 
 # --- Globals & Constants ---
 CONFIG_FILE = "settings.conf"
@@ -36,8 +59,11 @@ IMPORT_FOLDER = "Images import"
 EXPORT_FOLDER = "Images export"
 CSV_FILENAME = "index.csv"
 LOG_FILENAME = "script_activity.log"
+PREVIEW_MAX_WIDTH = 250
+PREVIEW_MAX_HEIGHT = 250
 
 # --- ANSI Color Code Definitions (Used only for stripping in logs) ---
+# These are kept for stripping potential color codes from external sources if needed
 _COLOR_CODE_RESET = "\033[0m"
 _COLOR_CODE_RED = "\033[91m"
 _COLOR_CODE_GREEN = "\033[92m"
@@ -53,43 +79,49 @@ if not logger.handlers:
 logger.setLevel(logging.INFO)
 
 # --- Global variable to hold configuration ---
-# This will be loaded once at the start
 app_config = {}
-base_dir_path = os.path.dirname(os.path.abspath(__file__)) # Default base dir
+# Determine base path more robustly
+if getattr(sys, 'frozen', False):
+    base_dir_path = os.path.dirname(sys.executable)
+else:
+    base_dir_path = os.path.dirname(os.path.abspath(__file__))
 
-# --- Utility Functions (Modified for GUI/Logging) ---
+# --- Utility Functions ---
 
 def strip_ansi_codes(text):
     """Removes ANSI escape codes from a string."""
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-    return ansi_escape.sub('', str(text)) # Ensure input is string
+    return ansi_escape.sub('', str(text))
 
 def setup_file_logging(base_dir, enable_logging):
     """Configures or removes file logging based on the enable_logging flag."""
-    global logger # Need to modify global logger
-    log_file_path = os.path.join(base_dir, LOG_FILENAME)
-    file_handler = None
-    for handler in logger.handlers[:]:
-        if isinstance(handler, logging.FileHandler):
-            if getattr(handler, 'baseFilename', None) == log_file_path:
-                file_handler = handler
-            logger.removeHandler(handler)
-            handler.close()
+    global logger
+    try:
+        log_file_path = os.path.join(base_dir, LOG_FILENAME)
+        file_handler = None
+        for handler in logger.handlers[:]:
+            if isinstance(handler, logging.FileHandler):
+                 if getattr(handler, 'baseFilename', None) == log_file_path:
+                    file_handler = handler
+                 logger.removeHandler(handler)
+                 handler.close()
 
-    if str(enable_logging).lower() == 'true':
-        fh = logging.FileHandler(log_file_path, encoding='utf-8')
-        fh.setLevel(logging.INFO)
-        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
-        fh.setFormatter(formatter)
-        logger.addHandler(fh)
-        if not file_handler:
-             logger.info(f"File logging enabled. Log file: {log_file_path}")
-    else:
-        if file_handler:
-            logger.info("File logging disabled and handler removed.")
+        if str(enable_logging).lower() == 'true':
+            fh = logging.FileHandler(log_file_path, encoding='utf-8')
+            fh.setLevel(logging.INFO)
+            formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+            fh.setFormatter(formatter)
+            logger.addHandler(fh)
+            is_new_handler = len(logger.handlers) <= 2
+            if is_new_handler:
+                 logger.info(f"File logging enabled. Log file: {log_file_path}")
+        else:
+            if file_handler:
+                logger.info("File logging disabled and handler removed.")
+    except Exception as e:
+        print(f"ERROR setting up logging: {e}")
 
 # --- GUI Status Update Function ---
-# Use a queue to safely update GUI from other threads
 status_queue = queue.Queue()
 
 def update_status_display(text_widget):
@@ -104,104 +136,94 @@ def update_status_display(text_widget):
             text_widget.tag_config("WARNING", foreground="orange")
             text_widget.tag_config("ERROR", foreground="red", font=('TkDefaultFont', 9, 'bold'))
             text_widget.tag_config("CRITICAL", foreground="red", background="yellow", font=('TkDefaultFont', 9, 'bold'))
-            text_widget.tag_config("PRINT", foreground="black") # Default for simple prints
+            text_widget.tag_config("PRINT", foreground="black")
 
-            tag = "PRINT" # Default
-            if level == logging.INFO:
-                tag = "INFO"
-                logger.info(clean_message)
-            elif level == logging.WARNING:
-                tag = "WARNING"
-                logger.warning(clean_message)
-            elif level == logging.ERROR:
-                tag = "ERROR"
-                logger.error(clean_message)
-            elif level == logging.CRITICAL:
-                 tag = "CRITICAL"
-                 logger.critical(clean_message)
-            elif level == "SUCCESS": # Custom level for green GUI messages
-                 tag = "SUCCESS"
-                 logger.info(f"OK: {clean_message}")
+            tag = "PRINT"
+            log_level_int = logging.INFO
+            if isinstance(level, int):
+                log_level_int = level
+                if level == logging.INFO: tag = "INFO"
+                elif level == logging.WARNING: tag = "WARNING"
+                elif level == logging.ERROR: tag = "ERROR"
+                elif level == logging.CRITICAL: tag = "CRITICAL"
+                elif level == logging.DEBUG: tag = "PRINT"
+            elif isinstance(level, str):
+                if level == "SUCCESS":
+                     tag = "SUCCESS"; log_level_int = logging.INFO
+                     logger.info(f"OK: {clean_message}")
+                elif level == "PRINT":
+                     tag = "PRINT"; log_level_int = logging.DEBUG
+                     logger.debug(clean_message)
+                else: tag = "PRINT"; logger.info(clean_message)
 
-            # Insert message with appropriate tag
+            if isinstance(level, int): logger.log(log_level_int, clean_message)
+
             text_widget.config(state=tk.NORMAL)
             text_widget.insert(tk.END, f"{message}\n", tag)
             text_widget.config(state=tk.DISABLED)
-            text_widget.see(tk.END) # Scroll to the end
-            text_widget.update_idletasks() # Ensure update happens
+            text_widget.see(tk.END)
+            text_widget.update_idletasks()
 
-    except queue.Empty:
-        pass # No messages in queue
-    # Schedule the next check
+    except queue.Empty: pass
     text_widget.after(100, lambda: update_status_display(text_widget))
 
 def log_status(level, message):
     """Puts a message into the queue for the GUI status display."""
     status_queue.put((level, message))
 
-# --- Configuration Handling (Modified for GUI) ---
+# --- Configuration Handling ---
 
 def load_config_gui():
     """Loads config or sets defaults if file missing/invalid. Returns config dict."""
     global app_config, base_dir_path
     config_parser = configparser.ConfigParser()
+    if not base_dir_path or not os.path.isdir(base_dir_path):
+         base_dir_path = os.path.dirname(os.path.abspath(__file__))
+
     defaults = {
-        'drive_id': '',
-        'api_key': '',
-        'base_dir': base_dir_path, # Default to script location initially
-        'enable_colors': 'true', # GUI doesn't use console colors directly
-        'enable_logging': 'true',
-        'enable_upload': 'true'
+        'drive_id': '', 'api_key': '', 'base_dir': base_dir_path,
+        'enable_colors': 'true', 'enable_logging': 'true', 'enable_upload': 'true'
     }
+    config_file_path = os.path.join(base_dir_path, CONFIG_FILE)
 
-    if os.path.exists(CONFIG_FILE):
+    if os.path.exists(config_file_path):
         try:
-            config_parser.read(CONFIG_FILE, encoding='utf-8')
+            config_parser.read(config_file_path, encoding='utf-8')
             if 'DEFAULT' in config_parser:
-                # Update defaults with values from file
-                for key in defaults:
-                    defaults[key] = config_parser['DEFAULT'].get(key, defaults[key])
-            else:
-                # Use temporary print as logging/colors might not be set
-                print(f"WARNING: Config file '{CONFIG_FILE}' found but missing [DEFAULT] section. Using defaults.")
-        except Exception as e:
-            print(f"ERROR: Error reading config file '{CONFIG_FILE}': {e}. Using defaults.")
-            # Keep defaults
-    else:
-        print(f"INFO: Config file '{CONFIG_FILE}' not found. Using defaults and will create on save.")
+                for key in defaults: defaults[key] = config_parser['DEFAULT'].get(key, defaults[key])
+            else: print(f"WARNING: Config file '{config_file_path}' found but missing [DEFAULT]. Using defaults.")
+        except Exception as e: print(f"ERROR: Error reading config file '{config_file_path}': {e}. Using defaults.")
+    else: print(f"INFO: Config file '{config_file_path}' not found. Using defaults.")
 
-    # Validate base_dir
-    base_dir_path = defaults['base_dir']
-    if not os.path.isdir(base_dir_path):
-        print(f"WARNING: Base directory '{base_dir_path}' from config/default is invalid. Resetting to script directory.")
-        base_dir_path = os.path.dirname(os.path.abspath(__file__))
-        defaults['base_dir'] = base_dir_path
+    loaded_base_dir = defaults['base_dir']
+    if not os.path.isdir(loaded_base_dir):
+        print(f"WARNING: Base directory '{loaded_base_dir}' invalid. Resetting to script directory.")
+        loaded_base_dir = os.path.dirname(os.path.abspath(__file__))
+        defaults['base_dir'] = loaded_base_dir
+    base_dir_path = loaded_base_dir
 
-    # Setup logging based on loaded/default value
     setup_file_logging(base_dir_path, defaults['enable_logging'])
     logger.info("Configuration loaded/defaults applied.")
-    app_config = defaults # Store loaded/default config globally
+    app_config = defaults
     return app_config
 
-def save_config_gui(show_success_popup=False): # Added parameter
+def save_config_gui(show_success_popup=False):
     """Saves the current app_config to the config file."""
     global app_config
     config_parser = configparser.ConfigParser()
-    # Ensure all keys are strings for saving
     config_to_save = {k: str(v) for k, v in app_config.items()}
     config_parser['DEFAULT'] = config_to_save
+    config_file_path = os.path.join(app_config.get('base_dir', base_dir_path), CONFIG_FILE)
 
     try:
-        with open(CONFIG_FILE, 'w', encoding='utf-8') as configfile:
+        with open(config_file_path, 'w', encoding='utf-8') as configfile:
             config_parser.write(configfile)
-        log_status("SUCCESS", f"Configuration saved to '{CONFIG_FILE}'.")
-        logger.info(f"Configuration saved to '{CONFIG_FILE}'.")
-        # Ensure directories exist after potentially changing base_dir
+        log_status("SUCCESS", f"Configuration saved to '{config_file_path}'.")
+        logger.info(f"Configuration saved to '{config_file_path}'.")
         base_dir = app_config.get('base_dir', '.')
         os.makedirs(os.path.join(base_dir, IMPORT_FOLDER), exist_ok=True)
         os.makedirs(os.path.join(base_dir, EXPORT_FOLDER), exist_ok=True)
-        if show_success_popup: # Check parameter
-             messagebox.showinfo("Config Saved", "Configuration saved successfully.")
+        if show_success_popup: messagebox.showinfo("Config Saved", "Configuration saved successfully.")
         return True
     except IOError as e:
         log_status(logging.ERROR, f"Could not save config file: {e}")
@@ -212,13 +234,13 @@ def save_config_gui(show_success_popup=False): # Added parameter
          messagebox.showerror("Config Save Error", f"An unexpected error occurred:\n{e}")
          return False
 
-# --- Core Logic Functions (Adapted for GUI feedback via log_status) ---
+# --- Core Logic Functions ---
 
 def read_uploaded_originals(csv_path):
     """Reads original filenames (column 2) from the CSV log."""
     originals = set()
     if not os.path.exists(csv_path):
-        logger.info(f"CSV file '{csv_path}' not found. Assuming no previously uploaded files.")
+        logger.info(f"CSV file '{csv_path}' not found. Assuming no previously logged files.")
         return originals
 
     logger.info(f"Reading previously uploaded original filenames from '{csv_path}'.")
@@ -318,7 +340,11 @@ def download_drive_folder_thread(drive_id, download_path, csv_path, callback):
 
     # Use callback to return results to the main thread
     if callback:
-        callback(files_to_process, error_message)
+        # Use root.after to schedule the callback in the main GUI thread
+        if UploaderApp.instance and UploaderApp.instance.root:
+             UploaderApp.instance.root.after(0, lambda: callback(files_to_process, error_message))
+        else:
+             logger.error("Cannot execute callback: Main GUI window not found.")
 
 
 def upload_to_sul_thread(file_path, api_key, result_queue):
@@ -461,7 +487,7 @@ def get_csv_data(csv_path):
         return header, []
 
 
-# --- GUI Application Class ---
+# --- Main GUI Application Class ---
 
 class UploaderApp:
     instance = None # Class variable to hold the single instance
@@ -473,12 +499,14 @@ class UploaderApp:
 
         self.root = root
         self.root.title("Google Drive to S-UL Uploader")
-        # Make window slightly larger
-        self.root.geometry("750x650")
+        # Set new default size
+        self.root.geometry("950x650") # Wider
+        self.root.columnconfigure(0, weight=1) # Allow main frame to expand
+        self.root.rowconfigure(0, weight=1)
 
         # Load initial configuration
         global app_config
-        app_config = load_config_gui()
+        app_config = load_config_gui() # Call the corrected function name
 
         # --- Variables for GUI elements ---
         self.drive_id_var = tk.StringVar(value=app_config.get('drive_id', ''))
@@ -489,104 +517,256 @@ class UploaderApp:
         # GUI doesn't use console colors, but keep var for config consistency
         self.enable_colors_var = tk.BooleanVar(value=str(app_config.get('enable_colors', 'true')).lower() == 'true')
 
+        # --- Stats Variables ---
+        self.total_entries_var = tk.StringVar(value="Total Entries: N/A")
+        self.import_files_var = tk.StringVar(value="Import Files Found: N/A")
+        self.export_files_var = tk.StringVar(value="Export Files Found: N/A")
+        self.url_entries_var = tk.StringVar(value="Entries with URL: N/A")
+        self.import_status_var = tk.StringVar(value="?")
+        self.export_status_var = tk.StringVar(value="?")
+        self.url_status_var = tk.StringVar(value="?")
+
         # --- Build GUI ---
         self.create_widgets()
         self.update_widget_states() # Initial state update
+        self.update_stats() # Initial stats update
 
         # Start the status display updater
         self.status_text.after(100, lambda: update_status_display(self.status_text))
         log_status(logging.INFO, "Application initialized.")
 
+    # --- GUI Creation Methods ---
     def create_widgets(self):
-        # Main frame
+        # Main frame using grid
         main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame.grid(row=0, column=0, sticky="nsew") # Use grid for main frame
+        # Configure grid weights for the new layout
+        main_frame.columnconfigure(0, weight=2, minsize=450) # Config/Actions column (wider minsize)
+        main_frame.columnconfigure(1, weight=3) # Stats/Status column (wider)
+        main_frame.rowconfigure(0, weight=0) # Config/Stats row (fixed height)
+        main_frame.rowconfigure(1, weight=1) # Actions/Status row (expandable)
 
-        # --- Configuration Frame ---
+
+        # --- Configuration Frame (Top-Left) ---
         config_frame = ttk.LabelFrame(main_frame, text="Configuration", padding="10")
-        config_frame.pack(fill=tk.X, pady=5)
+        config_frame.grid(row=0, column=0, padx=(0, 5), pady=(0, 5), sticky="new")
         config_frame.columnconfigure(1, weight=1) # Make entry fields expand
 
-        ttk.Label(config_frame, text="Google Drive ID/URL:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
-        drive_entry = ttk.Entry(config_frame, textvariable=self.drive_id_var, width=60)
-        drive_entry.grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
+        ttk.Label(config_frame, text="Google Drive ID/URL:").grid(row=0, column=0, padx=5, pady=2, sticky=tk.W)
+        drive_entry = ttk.Entry(config_frame, textvariable=self.drive_id_var, width=40) # Adjust width
+        drive_entry.grid(row=0, column=1, columnspan=2, padx=5, pady=2, sticky=tk.EW)
 
-        ttk.Label(config_frame, text="S-UL API Key:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
-        api_key_entry = ttk.Entry(config_frame, textvariable=self.api_key_var, width=60, show="*") # Hide API key
-        api_key_entry.grid(row=1, column=1, padx=5, pady=5, sticky=tk.EW)
+        ttk.Label(config_frame, text="S-UL API Key:").grid(row=1, column=0, padx=5, pady=2, sticky=tk.W)
+        self.api_key_entry = ttk.Entry(config_frame, textvariable=self.api_key_var, width=40, show="*") # Store reference
+        self.api_key_entry.grid(row=1, column=1, columnspan=2, padx=5, pady=2, sticky=tk.EW)
 
-        ttk.Label(config_frame, text="Base Directory:").grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
-        base_dir_entry = ttk.Entry(config_frame, textvariable=self.base_dir_var, width=60)
-        base_dir_entry.grid(row=2, column=1, padx=5, pady=5, sticky=tk.EW)
-        browse_button = ttk.Button(config_frame, text="Browse...", command=self.browse_base_dir)
-        browse_button.grid(row=2, column=2, padx=5, pady=5)
+        ttk.Label(config_frame, text="Base Directory:").grid(row=2, column=0, padx=5, pady=2, sticky=tk.W)
+        base_dir_entry = ttk.Entry(config_frame, textvariable=self.base_dir_var, width=40)
+        base_dir_entry.grid(row=2, column=1, padx=5, pady=2, sticky=tk.EW)
+        browse_button = ttk.Button(config_frame, text="Browse...", command=self.browse_base_dir, width=8) # Fixed width
+        browse_button.grid(row=2, column=2, padx=5, pady=2, sticky=tk.E)
 
         # --- Toggles Frame ---
         toggles_frame = ttk.Frame(config_frame)
         toggles_frame.grid(row=3, column=0, columnspan=3, pady=5, sticky=tk.W)
 
-        log_check = ttk.Checkbutton(toggles_frame, text="Enable File Logging", variable=self.enable_logging_var, command=self.toggle_logging)
-        log_check.pack(side=tk.LEFT, padx=10)
+        self.log_check = ttk.Checkbutton(toggles_frame, text="Enable Logging", variable=self.enable_logging_var, command=self.toggle_logging)
+        self.log_check.pack(side=tk.LEFT, padx=(0,10))
 
-        upload_check = ttk.Checkbutton(toggles_frame, text="Enable Uploads", variable=self.enable_upload_var, command=self.toggle_uploads)
-        upload_check.pack(side=tk.LEFT, padx=10)
-
-        # --- Added Open Log/CSV Buttons ---
-        file_button_frame = ttk.Frame(toggles_frame) # New frame for file buttons
-        file_button_frame.pack(side=tk.LEFT, padx=10)
-
-        open_log_button = ttk.Button(file_button_frame, text="Open Log File", command=self.open_log_file)
-        open_log_button.pack(side=tk.LEFT, padx=5)
-        open_csv_button = ttk.Button(file_button_frame, text="Open CSV File", command=self.open_csv_file)
-        open_csv_button.pack(side=tk.LEFT, padx=5)
-
+        self.upload_check = ttk.Checkbutton(toggles_frame, text="Enable Uploads", variable=self.enable_upload_var, command=self.toggle_uploads)
+        self.upload_check.pack(side=tk.LEFT, padx=10)
 
         # Save Config Button
-        save_button = ttk.Button(config_frame, text="Save Configuration", command=self.save_config_action_with_popup) # Changed command
+        save_button = ttk.Button(config_frame, text="Save Configuration", command=self.save_config_action_with_popup)
         save_button.grid(row=4, column=0, columnspan=3, pady=10)
 
-        # --- Actions Frame ---
+        # --- Stats Frame (Top-Right) --- Changed row/column
+        stats_frame = ttk.LabelFrame(main_frame, text="Stats", padding="10")
+        stats_frame.grid(row=0, column=1, padx=(5, 0), pady=(0, 5), sticky="nsew")
+        stats_frame.columnconfigure(1, weight=0) # Status indicator column fixed width
+        stats_frame.columnconfigure(2, weight=1) # Text label expands
+
+        ttk.Label(stats_frame, textvariable=self.total_entries_var).grid(row=0, column=0, columnspan=3, sticky=tk.W, padx=5, pady=2)
+
+        ttk.Label(stats_frame, text="Import Files:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
+        self.import_status_label = ttk.Label(stats_frame, textvariable=self.import_status_var, width=6, anchor="center", relief="sunken", foreground="grey") # Increased width
+        self.import_status_label.grid(row=1, column=1, sticky=tk.W, padx=5)
+        ttk.Label(stats_frame, textvariable=self.import_files_var).grid(row=1, column=2, sticky=tk.W, padx=5)
+
+        ttk.Label(stats_frame, text="Export Files:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
+        self.export_status_label = ttk.Label(stats_frame, textvariable=self.export_status_var, width=6, anchor="center", relief="sunken", foreground="grey") # Increased width
+        self.export_status_label.grid(row=2, column=1, sticky=tk.W, padx=5)
+        ttk.Label(stats_frame, textvariable=self.export_files_var).grid(row=2, column=2, sticky=tk.W, padx=5)
+
+        ttk.Label(stats_frame, text="Upload Status:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
+        self.url_status_label = ttk.Label(stats_frame, textvariable=self.url_status_var, width=6, anchor="center", relief="sunken", foreground="grey") # Increased width
+        self.url_status_label.grid(row=3, column=1, sticky=tk.W, padx=5)
+        ttk.Label(stats_frame, textvariable=self.url_entries_var).grid(row=3, column=2, sticky=tk.W, padx=5)
+
+        refresh_stats_button = ttk.Button(stats_frame, text="Refresh Stats", command=self.update_stats)
+        refresh_stats_button.grid(row=4, column=0, columnspan=3, pady=(10,0))
+
+        # --- Actions Frame (Bottom-Left) --- Changed row/column
         actions_frame = ttk.LabelFrame(main_frame, text="Actions", padding="10")
-        actions_frame.pack(fill=tk.X, pady=5)
-        # Configure columns to expand equally
+        actions_frame.grid(row=1, column=0, padx=(0, 5), pady=(5, 0), sticky="nsew")
         actions_frame.columnconfigure(0, weight=1)
         actions_frame.columnconfigure(1, weight=1)
-        actions_frame.columnconfigure(2, weight=1)
 
+        self.start_button = ttk.Button(actions_frame, text="Start Script", command=self.start_script_action)
+        self.start_button.grid(row=0, column=0, columnspan=2, padx=5, pady=5, sticky=tk.EW)
 
-        start_button = ttk.Button(actions_frame, text="Start Script (Import/Rename/Upload)", command=self.start_script_action)
-        start_button.grid(row=0, column=0, padx=5, pady=5, sticky=tk.EW)
+        self.edit_button = ttk.Button(actions_frame, text="Edit CSV Entry", command=self.edit_entry_action)
+        self.edit_button.grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky=tk.EW) # Span across
 
-        edit_button = ttk.Button(actions_frame, text="Edit CSV Entry", command=self.edit_entry_action)
-        edit_button.grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
+        self.bulk_rename_button = ttk.Button(actions_frame, text="Bulk Rename Existing Items", command=self.bulk_rename_action)
+        self.bulk_rename_button.grid(row=2, column=0, padx=5, pady=5, sticky=tk.EW)
 
-        bulk_rename_button = ttk.Button(actions_frame, text="Bulk Rename Existing Items", command=self.bulk_rename_action)
-        bulk_rename_button.grid(row=1, column=0, padx=5, pady=5, sticky=tk.EW)
+        self.bulk_upload_button = ttk.Button(actions_frame, text="Bulk Upload Existing Items", command=self.bulk_upload_action)
+        self.bulk_upload_button.grid(row=2, column=1, padx=5, pady=5, sticky=tk.EW)
 
-        bulk_upload_button = ttk.Button(actions_frame, text="Bulk Upload Existing Items", command=self.bulk_upload_action)
-        bulk_upload_button.grid(row=1, column=1, padx=5, pady=5, sticky=tk.EW)
+        # --- Moved File Buttons Here ---
+        file_button_frame = ttk.Frame(actions_frame)
+        file_button_frame.grid(row=3, column=0, columnspan=2, pady=(10,0), sticky=tk.EW) # Add padding top
+        file_button_frame.columnconfigure(0, weight=1)
+        file_button_frame.columnconfigure(1, weight=1)
+        file_button_frame.columnconfigure(2, weight=1)
 
-        nuke_button = ttk.Button(actions_frame, text="NUKE Directory", command=self.nuke_action)
-        nuke_button.grid(row=1, column=2, padx=5, pady=5, sticky=tk.EW)
-        # Add style for Nuke button
+        open_log_button = ttk.Button(file_button_frame, text="Open Log", command=self.open_log_file)
+        open_log_button.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
+        open_csv_button = ttk.Button(file_button_frame, text="Open CSV", command=self.open_csv_file)
+        open_csv_button.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
+        self.copy_csv_button = ttk.Button(file_button_frame, text="Copy CSV", command=self.copy_csv_data_to_clipboard)
+        self.copy_csv_button.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
+        if not PYPERCLIP_AVAILABLE: self.copy_csv_button.config(state=tk.DISABLED)
+
+        # --- Help and Nuke Buttons ---
+        bottom_button_frame = ttk.Frame(actions_frame)
+        bottom_button_frame.grid(row=5, column=0, columnspan=2, pady=(10,0), sticky=tk.EW)
+        bottom_button_frame.columnconfigure(0, weight=1)
+        bottom_button_frame.columnconfigure(1, weight=1)
+
+        self.help_button = ttk.Button(bottom_button_frame, text="Help/Info", command=self.show_help_info)
+        self.help_button.grid(row=0, column=0, padx=5, pady=5, sticky=tk.EW)
+
+        self.nuke_button = ttk.Button(bottom_button_frame, text="NUKE Directory", command=self.nuke_action)
         style = ttk.Style()
         style.configure("Nuke.TButton", foreground="red", font=('TkDefaultFont', 9, 'bold'))
-        nuke_button.configure(style="Nuke.TButton")
+        self.nuke_button.configure(style="Nuke.TButton")
+        self.nuke_button.grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
 
 
-        # --- Status Frame ---
+        # --- Status Frame (Bottom-Right) --- Changed row/column
         status_frame = ttk.LabelFrame(main_frame, text="Status / Log", padding="10")
-        status_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        status_frame.grid(row=1, column=1, padx=(5, 0), pady=(5, 0), sticky="nsew")
 
-        self.status_text = tk.Text(status_frame, height=15, width=80, state=tk.DISABLED, wrap=tk.WORD, borderwidth=1, relief="sunken")
+        self.status_text = tk.Text(status_frame, height=10, width=50, state=tk.DISABLED, wrap=tk.WORD, borderwidth=1, relief="sunken") # Adjusted size
         self.status_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         scrollbar = ttk.Scrollbar(status_frame, orient=tk.VERTICAL, command=self.status_text.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.status_text.config(yscrollcommand=scrollbar.set)
 
-    # --- GUI Action Handlers ---
+    # --- Stats Update Method ---
+    def update_stats(self):
+        """Reads CSV and checks files to update the stats labels."""
+        log_status(logging.INFO, "Refreshing stats...")
+        csv_path = os.path.join(app_config.get('base_dir', base_dir_path), CSV_FILENAME)
+        import_path_base = os.path.join(app_config.get('base_dir', base_dir_path), IMPORT_FOLDER)
+        export_path_base = os.path.join(app_config.get('base_dir', base_dir_path), EXPORT_FOLDER)
 
+        header, data = get_csv_data(csv_path)
+
+        if header is None:
+            self.total_entries_var.set("Total Entries: Error reading CSV")
+            self.import_files_var.set("Import Files Found: N/A")
+            self.export_files_var.set("Export Files Found: N/A")
+            self.url_entries_var.set("Entries with URL: N/A")
+            self.import_status_var.set("ERR")
+            self.export_status_var.set("ERR")
+            self.url_status_var.set("ERR")
+            self.import_status_label.config(foreground="white", background="red") # Use colors for status
+            self.export_status_label.config(foreground="white", background="red")
+            self.url_status_label.config(foreground="white", background="red")
+            return
+
+        total_entries = len(data)
+        import_found = 0
+        export_found = 0
+        url_found = 0
+        import_missing = False
+        export_missing = False
+
+        try:
+            orig_idx, renamed_idx, url_idx = 1, 2, 3 # Assuming standard column order
+            if not (header[orig_idx] == "Original" and header[renamed_idx] == "Renamed" and header[url_idx] == "URL"):
+                 raise ValueError("CSV header mismatch")
+
+            for row in data:
+                if os.path.exists(os.path.join(import_path_base, row[orig_idx])):
+                    import_found += 1
+                else:
+                    import_missing = True # Mark if any import file is missing
+
+                if os.path.exists(os.path.join(export_path_base, row[renamed_idx])):
+                    export_found += 1
+                else:
+                    export_missing = True # Mark if any export file is missing
+
+                if row[url_idx]:
+                    url_found += 1
+
+        except (IndexError, ValueError):
+            log_status(logging.ERROR, "Error processing CSV for stats: Header mismatch or row error.")
+            messagebox.showerror("Stats Error", "Could not process CSV data for stats due to invalid format.")
+            # Reset stats to error state
+            self.total_entries_var.set("Total Entries: CSV Format Error")
+            self.import_files_var.set("Import Files Found: N/A")
+            self.export_files_var.set("Export Files Found: N/A")
+            self.url_entries_var.set("Entries with URL: N/A")
+            self.import_status_var.set("ERR"); self.import_status_label.config(foreground="white", background="red")
+            self.export_status_var.set("ERR"); self.export_status_label.config(foreground="white", background="red")
+            self.url_status_var.set("ERR"); self.url_status_label.config(foreground="white", background="red")
+            return
+
+        # Update variables
+        self.total_entries_var.set(f"Total Entries: {total_entries}")
+        self.import_files_var.set(f"Import Files Found: {import_found}/{total_entries}")
+        self.export_files_var.set(f"Export Files Found: {export_found}/{total_entries}")
+        self.url_entries_var.set(f"Entries with URL: {url_found}/{total_entries}")
+
+        # Update status indicators
+        if total_entries == 0:
+            self.import_status_var.set("N/A"); self.import_status_label.config(foreground="grey", background="SystemButtonFace")
+            self.export_status_var.set("N/A"); self.export_status_label.config(foreground="grey", background="SystemButtonFace")
+            self.url_status_var.set("N/A"); self.url_status_label.config(foreground="grey", background="SystemButtonFace")
+        else:
+            if import_missing:
+                self.import_status_var.set("MISS"); self.import_status_label.config(foreground="white", background="red")
+            else:
+                self.import_status_var.set("OK"); self.import_status_label.config(foreground="white", background="green")
+
+            if export_missing:
+                self.export_status_var.set("MISS"); self.export_status_label.config(foreground="white", background="red")
+            else:
+                self.export_status_var.set("OK"); self.export_status_label.config(foreground="white", background="green")
+
+            if url_found == total_entries:
+                 self.url_status_var.set("ALL"); self.url_status_label.config(foreground="white", background="green")
+            elif url_found > 0:
+                 self.url_status_var.set("PART"); self.url_status_label.config(foreground="black", background="orange")
+            else:
+                 self.url_status_var.set("NONE"); self.url_status_label.config(foreground="white", background="red")
+
+        log_status(logging.INFO, "Stats refreshed.")
+
+
+    # --- GUI Action Handlers ---
+    # (Keep browse_base_dir, update_widget_states, save_config_action, save_config_action_with_popup,
+    #  toggle_logging, toggle_uploads, open_log_file, open_csv_file, copy_csv_data_to_clipboard,
+    #  show_help_info, run_in_thread, start_script_action, handle_download_complete,
+    #  process_local_folder, ask_rename_method, individual_rename_gui, bulk_rename_new_files_thread,
+    #  process_uploads_and_log, edit_entry_action, bulk_rename_action, bulk_upload_action, nuke_action)
+    # ... (These methods omitted for brevity but should be included here) ...
     def browse_base_dir(self):
         directory = filedialog.askdirectory(initialdir=self.base_dir_var.get() or base_dir_path)
         if directory: # Only update if a directory was selected
@@ -595,13 +775,14 @@ class UploaderApp:
 
     def update_widget_states(self):
         """Enable/disable widgets based on current config state."""
-        # Example: Disable upload-related buttons if API key missing or uploads disabled
-        api_key_present = bool(self.api_key_var.get())
+        api_key_present = bool(self.api_key_var.get()) # Use var here
         uploads_enabled_state = self.enable_upload_var.get()
         can_upload = api_key_present and uploads_enabled_state
 
-        # Find buttons (this is a bit fragile, assumes button text doesn't change drastically)
-        # A better way is to store button references, but this works for now
+        # Find buttons (this is fragile, better to store references)
+        # Storing references would be cleaner:
+        # self.bulk_upload_button.config(state=tk.NORMAL if can_upload else tk.DISABLED)
+        # ... but requires defining buttons as instance vars earlier
         for frame in self.root.winfo_children():
              if isinstance(frame, ttk.Frame): # Main frame
                  for sub_frame in frame.winfo_children():
@@ -611,22 +792,17 @@ class UploaderApp:
                                     button_text = widget.cget("text")
                                     if "Bulk Upload" in button_text:
                                          widget.config(state=tk.NORMAL if can_upload else tk.DISABLED)
-                                    # Add other button state logic here if needed
-                                    # e.g., disable Start Script if base dir invalid?
-                                    # base_ok = os.path.isdir(self.base_dir_var.get())
-                                    # if "Start Script" in button_text:
-                                    #     widget.config(state=tk.NORMAL if base_ok else tk.DISABLED)
 
 
-    def save_config_action(self, show_success_popup=False): # Modified to accept parameter
+    def save_config_action(self, show_success_popup=False):
         """Handles saving the configuration from the GUI."""
         global app_config, base_dir_path
         log_status(logging.INFO, "Saving configuration...")
         # Update app_config from GUI variables before saving
         app_config['drive_id'] = self.drive_id_var.get()
-        app_config['api_key'] = self.api_key_var.get()
+        app_config['api_key'] = self.api_key_var.get() # Use var here
         new_base_dir = self.base_dir_var.get()
-        app_config['enable_colors'] = str(self.enable_colors_var.get()).lower()
+        app_config['enable_colors'] = str(True).lower() # Colors not used in GUI itself
         app_config['enable_logging'] = str(self.enable_logging_var.get()).lower()
         app_config['enable_upload'] = str(self.enable_upload_var.get()).lower()
 
@@ -634,20 +810,20 @@ class UploaderApp:
         if not os.path.isdir(new_base_dir):
             log_status(logging.ERROR, f"Invalid Base Directory: '{new_base_dir}'. Cannot save.")
             messagebox.showerror("Save Error", f"Invalid Base Directory:\n{new_base_dir}\nPlease select a valid folder.")
-            return False # Indicate save failure
+            return False
 
         # If base dir changed, update global path and re-setup logging
         if new_base_dir != app_config.get('base_dir'):
              log_status(logging.INFO, f"Base directory changed from '{app_config.get('base_dir')}' to '{new_base_dir}'.")
              base_dir_path = new_base_dir
              app_config['base_dir'] = new_base_dir
-             setup_file_logging(base_dir_path, app_config['enable_logging']) # Use updated path
+             setup_file_logging(base_dir_path, app_config['enable_logging'])
 
-        if save_config_gui(show_success_popup): # Pass parameter here
-             self.update_widget_states() # Update button states after save
+        if save_config_gui(show_success_popup):
+             self.update_widget_states()
              return True
         else:
-             return False # Indicate save failure
+             return False
 
     def save_config_action_with_popup(self):
         """Wrapper to call save_config_action with popup enabled."""
@@ -674,7 +850,7 @@ class UploaderApp:
         """Handles toggling uploads, checking for API key."""
         global app_config
         is_enabled = self.enable_upload_var.get()
-        api_key_present = bool(app_config.get('api_key', ''))
+        api_key_present = bool(self.api_key_var.get()) # Use var here
 
         if is_enabled and not api_key_present:
             log_status(logging.WARNING, "Cannot enable uploads: API Key is not set.")
@@ -689,7 +865,7 @@ class UploaderApp:
 
     def open_log_file(self):
         """Opens the log file using the default system application."""
-        log_file_path = os.path.join(app_config.get('base_dir', '.'), LOG_FILENAME)
+        log_file_path = os.path.join(app_config.get('base_dir', base_dir_path), LOG_FILENAME)
         log_status(logging.INFO, f"Attempting to open log file: {log_file_path}")
         if not os.path.exists(log_file_path):
             log_status(logging.ERROR, "Log file does not exist yet.")
@@ -713,7 +889,7 @@ class UploaderApp:
 
     def open_csv_file(self):
         """Opens the CSV file using the default system application."""
-        csv_file_path = os.path.join(app_config.get('base_dir', '.'), CSV_FILENAME)
+        csv_file_path = os.path.join(app_config.get('base_dir', base_dir_path), CSV_FILENAME)
         log_status(logging.INFO, f"Attempting to open CSV file: {csv_file_path}")
         if not os.path.exists(csv_file_path):
             log_status(logging.ERROR, "CSV file does not exist yet.")
@@ -734,6 +910,89 @@ class UploaderApp:
             log_status(logging.ERROR, f"Failed to open CSV file: {e}")
             messagebox.showerror("Error", f"Failed to open CSV file:\n{e}")
             logger.exception("Failed to open CSV file")
+
+    def copy_csv_data_to_clipboard(self):
+        """Reads CSV data and copies it to the clipboard."""
+        if not PYPERCLIP_AVAILABLE:
+            messagebox.showerror("Error", "pyperclip library not found. Cannot copy.\nInstall with: pip install pyperclip")
+            return
+
+        csv_path = os.path.join(app_config.get('base_dir', base_dir_path), CSV_FILENAME)
+        log_status(logging.INFO, f"Attempting to copy CSV data from: {csv_path}")
+        if not os.path.exists(csv_path):
+            log_status(logging.ERROR, "CSV file does not exist yet.")
+            messagebox.showerror("Error", f"CSV file not found:\n{csv_path}")
+            return
+
+        try:
+            with open(csv_path, 'r', newline='', encoding='utf-8') as f:
+                csv_content = f.read()
+            pyperclip.copy(csv_content)
+            log_status("SUCCESS", "CSV data copied to clipboard.")
+            messagebox.showinfo("Copied", "CSV data copied to clipboard.")
+        except Exception as e:
+            log_status(logging.ERROR, f"Failed to read or copy CSV data: {e}")
+            messagebox.showerror("Error", f"Failed to read or copy CSV data:\n{e}")
+            logger.exception("Failed to copy CSV data")
+
+    def show_help_info(self):
+        """Displays the help/explanation text in a message box."""
+        log_status(logging.INFO, "Showing help/info.")
+        help_text = """
+How This Program Works:
+This tool automates fetching (Drive/Local), renaming, and uploading images to s-ul.eu.
+It keeps track of processed files in 'index.csv'.
+
+Key Folders:
+- Images import: Source for local import / Destination for Drive download.
+- Images export: Where renamed files are stored before/after upload.
+
+Key Files:
+- settings.conf: Stores your settings.
+- index.csv: Logs successfully processed files.
+- script_activity.log: Detailed log of script activity (if enabled).
+
+Main Actions:
+- Start Script: Begins the import/rename/upload workflow.
+- Edit CSV Entry: Allows modifying or deleting individual log entries.
+- Bulk Rename Existing: Renames all logged files sequentially.
+- Bulk Upload Existing: Uploads logged files that don't have a URL yet.
+- Nuke Directory: Permanently deletes the entire working folder (use with caution!).
+
+Settings:
+- Drive ID/URL: Target Google Drive folder.
+- API Key: Your s-ul.eu key (required for uploads).
+- Base Directory: Where the script operates and stores files.
+- Enable Logging: Toggles saving activity to script_activity.log.
+- Enable Uploads: Toggles the s-ul.eu upload feature globally.
+
+File Buttons:
+- Open Log/CSV: Opens the respective file using your system's default app.
+- Copy CSV Data: Copies the entire CSV content to your clipboard.
+
+GitHub: https://github.com/spodai/stuff/blob/main/team_banners.py
+"""
+        # Use a read-only text widget in a Toplevel for better formatting
+        help_win = tk.Toplevel(self.root)
+        help_win.title("Help / Information")
+        help_win.geometry("650x550")
+        help_win.transient(self.root)
+        help_win.grab_set()
+
+        text_frame = ttk.Frame(help_win, padding=10)
+        text_frame.pack(fill=tk.BOTH, expand=True)
+
+        help_text_widget = tk.Text(text_frame, wrap=tk.WORD, height=25, width=80)
+        help_text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=help_text_widget.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        help_text_widget.config(yscrollcommand=scrollbar.set)
+
+        help_text_widget.insert(tk.END, help_text.strip())
+        help_text_widget.config(state=tk.DISABLED) # Make read-only
+
+        close_button = ttk.Button(help_win, text="Close", command=help_win.destroy)
+        close_button.pack(pady=10)
 
 
     def run_in_thread(self, target_func, *args):
@@ -868,6 +1127,7 @@ class UploaderApp:
         renamed_list_gui = []
         skipped_count = 0
         renamed_count = 0
+        user_cancelled = False
         os.makedirs(export_path, exist_ok=True)
         log_status(logging.INFO, f"Starting individual rename for {len(files_to_process)} files...")
 
@@ -878,14 +1138,17 @@ class UploaderApp:
                 skipped_count += 1
                 continue
 
-            # Use askstring for each file
-            prompt = f"File {i+1}/{len(files_to_process)}: {original_filename}\nEnter new name (no ext, blank to keep):"
-            new_name_base = simpledialog.askstring("Rename File", prompt, parent=self.root)
+            # --- Use Custom Rename Dialog ---
+            dialog = RenameDialog(self.root, original_filename, src_path) # Pass root window as parent
+            # wait_window is implicitly handled by simpledialog.Dialog inheritance
+            # self.root.wait_window(dialog) # REMOVED - This was likely the cause of the error
+            new_name_base = dialog.new_name_base # Get result from dialog attribute after it closes
 
             if new_name_base is None: # User cancelled dialog
                  log_status(logging.WARNING, "Individual rename cancelled by user.")
                  messagebox.showwarning("Cancelled", "Rename process cancelled.")
-                 return # Abort the whole process
+                 user_cancelled = True
+                 break # Abort the whole process
 
             _, ext = os.path.splitext(original_filename)
             new_filename = f"{new_name_base.strip()}{ext}" if new_name_base.strip() else original_filename
@@ -926,12 +1189,13 @@ class UploaderApp:
                  messagebox.showerror("Copy Error", f"Error copying {original_filename}:\n{e}", parent=self.root)
                  skipped_count += 1
 
-        log_status(logging.INFO, f"Individual rename finished. Processed: {renamed_count}, Skipped: {skipped_count}.")
-        if renamed_list_gui:
-            # Proceed to upload/log
-            self.process_uploads_and_log(renamed_list_gui)
-        else:
-             log_status(logging.INFO, "No files were successfully processed during individual rename.")
+        if not user_cancelled:
+            log_status(logging.INFO, f"Individual rename finished. Processed: {renamed_count}, Skipped: {skipped_count}.")
+            if renamed_list_gui:
+                # Proceed to upload/log
+                self.process_uploads_and_log(renamed_list_gui)
+            else:
+                 log_status(logging.INFO, "No files were successfully processed during individual rename.")
 
 
     def bulk_rename_new_files_thread(self, import_path, export_path, files_to_process, base_name):
@@ -1013,6 +1277,7 @@ class UploaderApp:
             upload_queue = queue.Queue()
             threads = []
             for original_name, new_name, file_path in renamed_files_info:
+                # Pass result queue to thread
                 thread = threading.Thread(target=upload_to_sul_thread,
                                           args=(file_path, api_key, upload_queue),
                                           daemon=True)
@@ -1064,6 +1329,8 @@ class UploaderApp:
                     log_status(logging.INFO, "Processing complete.")
                     summary = f"{len(processed_for_csv)} files processed.\nSuccessful uploads: {successful_uploads}\nFailed uploads: {failed_uploads}"
                     messagebox.showinfo("Processing Complete", summary)
+                    # Refresh stats after processing is complete
+                    self.update_stats()
 
             # Start checking the queue
             self.root.after(100, check_upload_queue)
@@ -1086,6 +1353,10 @@ class UploaderApp:
             edit_window = EditWindow(self.root, csv_path, app_config)
             # The main window will wait until the edit window is closed
             # The edit window handles its own logic and saving
+            # Refresh stats after edit window closes
+            self.root.wait_window(edit_window)
+            self.update_stats()
+
         except Exception as e:
              log_status(logging.ERROR, f"Failed to open Edit window: {e}")
              messagebox.showerror("Error", f"Failed to open Edit window:\n{e}")
@@ -1157,14 +1428,74 @@ class UploaderApp:
                 logger.info("Attempted to re-establish logging after failed nuke.")
             except: pass # Ignore errors here
 
+    def show_help_info(self):
+        """Displays the help/explanation text in a message box."""
+        log_status(logging.INFO, "Showing help/info.")
+        help_text = """
+How This Program Works:
+This tool automates fetching (Drive/Local), renaming, and uploading images to s-ul.eu.
+It keeps track of processed files in 'index.csv'.
+
+Key Folders:
+- Images import: Source for local import / Destination for Drive download.
+- Images export: Where renamed files are stored before/after upload.
+
+Key Files:
+- settings.conf: Stores your settings.
+- index.csv: Logs successfully processed files.
+- script_activity.log: Detailed log of script activity (if enabled).
+
+Main Actions:
+- Start Script: Begins the import/rename/upload workflow.
+- Edit CSV Entry: Allows modifying or deleting individual log entries.
+- Bulk Rename Existing: Renames all logged files sequentially.
+- Bulk Upload Existing: Uploads logged files that don't have a URL yet.
+- Nuke Directory: Permanently deletes the entire working folder (use with caution!).
+
+Settings:
+- Drive ID/URL: Target Google Drive folder.
+- API Key: Your s-ul.eu key (required for uploads).
+- Base Directory: Where the script operates and stores files.
+- Enable Logging: Toggles saving activity to script_activity.log.
+- Enable Uploads: Toggles the s-ul.eu upload feature globally.
+
+File Buttons:
+- Open Log/CSV: Opens the respective file using your system's default app.
+- Copy CSV Data: Copies the entire CSV content to your clipboard.
+
+GitHub: https://github.com/spodai/stuff/blob/main/team_banners.py
+"""
+        # Use a read-only text widget in a Toplevel for better formatting
+        help_win = tk.Toplevel(self.root)
+        help_win.title("Help / Information")
+        help_win.geometry("650x550")
+        help_win.transient(self.root)
+        help_win.grab_set()
+
+        text_frame = ttk.Frame(help_win, padding=10)
+        text_frame.pack(fill=tk.BOTH, expand=True)
+
+        help_text_widget = tk.Text(text_frame, wrap=tk.WORD, height=25, width=80)
+        help_text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=help_text_widget.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        help_text_widget.config(yscrollcommand=scrollbar.set)
+
+        help_text_widget.insert(tk.END, help_text.strip())
+        help_text_widget.config(state=tk.DISABLED) # Make read-only
+
+        close_button = ttk.Button(help_win, text="Close", command=help_win.destroy)
+        close_button.pack(pady=10)
+
+
 # --- Edit Entry Window Class ---
 class EditWindow(tk.Toplevel):
     def __init__(self, parent, csv_path, current_config):
         super().__init__(parent)
         self.title("Edit CSV Entry")
-        self.geometry("700x550") # Made wider and taller
-        self.transient(parent) # Keep window on top of parent
-        self.grab_set() # Modal behavior
+        self.geometry("850x650") # Made wider and taller
+        self.transient(parent)
+        self.grab_set()
 
         self.csv_path = csv_path
         self.config = current_config
@@ -1174,87 +1505,139 @@ class EditWindow(tk.Toplevel):
         self.api_key = current_config.get('api_key')
         self.uploads_enabled = str(current_config.get('enable_upload', 'true')).lower() == 'true'
 
-        self.header, self.data = get_csv_data(self.csv_path) # Load data on init
-        # Store original data for potential revert on save failure
-        self.original_data_on_load = [list(row) for row in self.data]
+        self.header, self.data = get_csv_data(self.csv_path)
+        self.original_data_on_load = [list(row) for row in self.data] # Store original state
 
         if self.header is None or not self.data:
              messagebox.showerror("Error", "Could not load CSV data or CSV is empty.", parent=self)
              self.destroy()
              return
 
-        self.create_edit_widgets()
+        self.create_edit_widgets() # Call this AFTER initializing data
 
     def create_edit_widgets(self):
         main_frame = ttk.Frame(self, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame.columnconfigure(1, weight=3, minsize=PREVIEW_MAX_WIDTH*2 + 40) # Make preview area expand more, give minsize
+        main_frame.columnconfigure(0, weight=1, minsize=300) # Give listbox reasonable min width (Increased)
+        main_frame.rowconfigure(0, weight=3) # Give listbox/preview more weight
+        main_frame.rowconfigure(1, weight=1) # Give details less weight
+        main_frame.rowconfigure(2, weight=0) # Action buttons fixed height
+        main_frame.rowconfigure(3, weight=0) # Close button fixed height
 
-        # --- Define StringVars FIRST ---
+
+        # --- Top Frame for List and Preview ---
+        top_frame = ttk.Frame(main_frame)
+        top_frame.grid(row=0, column=0, columnspan=2, sticky="nsew", pady=(0,10))
+        top_frame.columnconfigure(0, weight=1, minsize=300) # Listbox column (Increased)
+        top_frame.columnconfigure(1, weight=3) # Preview column (matches main_frame config)
+        top_frame.rowconfigure(0, weight=1)
+
+        # --- Listbox Frame (Allowing Multi-Select) ---
+        list_frame = ttk.Frame(top_frame)
+        list_frame.grid(row=0, column=0, padx=(0, 10), pady=5, sticky="nsew")
+        ttk.Label(list_frame, text="Select Entry/Entries:").pack(side=tk.TOP, padx=5, anchor=tk.W)
+
+        listbox_inner_frame = ttk.Frame(list_frame) # Frame for listbox + scrollbar
+        listbox_inner_frame.pack(fill=tk.BOTH, expand=True)
+
+        self.entry_listbox = tk.Listbox(listbox_inner_frame, height=15, exportselection=False, selectmode=tk.EXTENDED)
+        self.entry_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar = ttk.Scrollbar(listbox_inner_frame, orient=tk.VERTICAL, command=self.entry_listbox.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.entry_listbox.config(yscrollcommand=scrollbar.set)
+        self.entry_listbox.bind('<<ListboxSelect>>', self.on_listbox_select)
+
+        # --- Preview Frame ---
+        preview_frame = ttk.LabelFrame(top_frame, text="Image Preview", padding="5")
+        preview_frame.grid(row=0, column=1, pady=5, sticky="nsew")
+        preview_frame.columnconfigure(0, weight=1)
+        preview_frame.columnconfigure(1, weight=1)
+        preview_frame.rowconfigure(1, weight=1)
+
+        ttk.Label(preview_frame, text="Import File").grid(row=0, column=0, pady=(0,5))
+        ttk.Label(preview_frame, text="Export File").grid(row=0, column=1, pady=(0,5))
+
+        # Use Labels to display images
+        self.import_image_label = ttk.Label(preview_frame, text="Preview N/A" if not PIL_AVAILABLE else "Select single item", relief="sunken", anchor="center")
+        self.import_image_label.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        self.export_image_label = ttk.Label(preview_frame, text="Preview N/A" if not PIL_AVAILABLE else "Select single item", relief="sunken", anchor="center")
+        self.export_image_label.grid(row=1, column=1, sticky="nsew", padx=5, pady=5)
+        self.import_photo = None # Keep reference
+        self.export_photo = None # Keep reference
+
+
+        # --- Details Frame (Improved Layout) ---
+        self.details_frame = ttk.LabelFrame(main_frame, text="Selected Item Details", padding="10")
+        self.details_frame.grid(row=1, column=0, columnspan=2, pady=5, sticky="ew") # Span both columns, fill x
+        self.details_frame.columnconfigure(1, weight=1) # Allow value label to expand
+        self.details_frame.columnconfigure(3, weight=1) # Allow URL label to expand
+
         self.detail_original_var = tk.StringVar()
         self.detail_renamed_var = tk.StringVar()
         self.detail_url_var = tk.StringVar()
         self.detail_ts_var = tk.StringVar()
-        # --- End Define StringVars ---
 
-        # --- Listbox Frame (Allowing Multi-Select) ---
-        list_frame = ttk.Frame(main_frame)
-        list_frame.pack(pady=5, fill=tk.BOTH, expand=True) # Expand listbox vertically
-        ttk.Label(list_frame, text="Select Entry (Ctrl/Shift+Click for multiple):").pack(side=tk.TOP, padx=5, anchor=tk.W)
+        ttk.Label(self.details_frame, text="Original:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=1)
+        ttk.Label(self.details_frame, textvariable=self.detail_original_var, anchor="w").grid(row=0, column=1, sticky=tk.EW, padx=5, pady=1)
+        ttk.Label(self.details_frame, text="Timestamp:").grid(row=0, column=2, sticky=tk.W, padx=5, pady=1)
+        ttk.Label(self.details_frame, textvariable=self.detail_ts_var, anchor="w").grid(row=0, column=3, sticky=tk.EW, padx=5, pady=1)
 
-        self.entry_listbox = tk.Listbox(list_frame, height=15, exportselection=False, selectmode=tk.EXTENDED) # Changed height and selectmode
-        self.entry_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
-        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.entry_listbox.yview)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.entry_listbox.config(yscrollcommand=scrollbar.set)
+        ttk.Label(self.details_frame, text="Renamed:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=1)
+        ttk.Label(self.details_frame, textvariable=self.detail_renamed_var, anchor="w").grid(row=1, column=1, sticky=tk.EW, padx=5, pady=1)
+        ttk.Label(self.details_frame, text="URL:").grid(row=1, column=2, sticky=tk.W, padx=5, pady=1)
+        ttk.Label(self.details_frame, textvariable=self.detail_url_var, anchor="w").grid(row=1, column=3, sticky=tk.EW, padx=5, pady=1)
 
-        self.entry_listbox.bind('<<ListboxSelect>>', self.on_listbox_select)
-
-        # --- Details Frame (Improved Layout) ---
-        self.details_frame = ttk.LabelFrame(main_frame, text="Selected Item Details", padding="10")
-        self.details_frame.pack(pady=10, fill=tk.X) # Fill X only
-        self.details_frame.columnconfigure(1, weight=1) # Allow value label to expand
-
-        ttk.Label(self.details_frame, text="Original:").grid(row=0, column=0, sticky=tk.NW, padx=5, pady=2)
-        ttk.Label(self.details_frame, textvariable=self.detail_original_var, wraplength=450, justify=tk.LEFT).grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
-        ttk.Label(self.details_frame, text="Renamed:").grid(row=1, column=0, sticky=tk.NW, padx=5, pady=2)
-        ttk.Label(self.details_frame, textvariable=self.detail_renamed_var, wraplength=450, justify=tk.LEFT).grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
-        ttk.Label(self.details_frame, text="URL:").grid(row=2, column=0, sticky=tk.NW, padx=5, pady=2)
-        ttk.Label(self.details_frame, textvariable=self.detail_url_var, wraplength=450, justify=tk.LEFT).grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
-        ttk.Label(self.details_frame, text="Timestamp:").grid(row=3, column=0, sticky=tk.NW, padx=5, pady=2)
-        ttk.Label(self.details_frame, textvariable=self.detail_ts_var).grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
 
         # --- Action Buttons Frame ---
-        action_button_frame = ttk.Frame(main_frame) # Use a simple frame
-        action_button_frame.pack(pady=5, fill=tk.X)
+        action_button_frame = ttk.Frame(main_frame)
+        action_button_frame.grid(row=2, column=0, columnspan=2, pady=5, sticky="ew")
 
-        # Single Item Actions (Left)
+        # Single Item Actions
         single_item_frame = ttk.Frame(action_button_frame)
-        single_item_frame.pack(side=tk.LEFT, padx=5)
-        ttk.Label(single_item_frame, text="Single Item Actions:").pack(anchor=tk.W)
-        self.rename_button = ttk.Button(single_item_frame, text="Change Renamed", command=self.action_rename, state=tk.DISABLED)
-        self.rename_button.pack(side=tk.LEFT, padx=2, pady=2)
-        self.reupload_button = ttk.Button(single_item_frame, text="Re-upload", command=self.action_reupload, state=tk.DISABLED)
-        self.reupload_button.pack(side=tk.LEFT, padx=2, pady=2)
-        self.editurl_button = ttk.Button(single_item_frame, text="Edit URL", command=self.action_edit_url, state=tk.DISABLED)
-        self.editurl_button.pack(side=tk.LEFT, padx=2, pady=2)
+        single_item_frame.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        ttk.Label(single_item_frame, text="Single Item Actions:").pack(anchor=tk.W, pady=(0,2))
+        single_btn_row1 = ttk.Frame(single_item_frame)
+        single_btn_row1.pack(fill=tk.X)
+        self.rename_button = ttk.Button(single_btn_row1, text="Change Name", command=self.action_rename, state=tk.DISABLED)
+        self.rename_button.pack(side=tk.LEFT, padx=2)
+        self.upload_button = ttk.Button(single_btn_row1, text="Upload / Re-upload", command=self.action_upload_single, state=tk.DISABLED) # Combined button
+        self.upload_button.pack(side=tk.LEFT, padx=2)
+        self.editurl_button = ttk.Button(single_btn_row1, text="Edit URL", command=self.action_edit_url, state=tk.DISABLED)
+        self.editurl_button.pack(side=tk.LEFT, padx=2)
+        self.removeurl_button = ttk.Button(single_btn_row1, text="Remove URL", command=self.action_remove_url, state=tk.DISABLED)
+        self.removeurl_button.pack(side=tk.LEFT, padx=2)
+        # Add single delete button here (calls same action as multi-delete)
+        self.delete_single_button = ttk.Button(single_btn_row1, text="Delete Entry", command=self.action_delete_selected, state=tk.DISABLED, style="Nuke.TButton")
+        self.delete_single_button.pack(side=tk.LEFT, padx=2)
 
-        # Multi Item Actions (Right)
+
+        # Multi Item Actions
         multi_item_frame = ttk.Frame(action_button_frame)
-        multi_item_frame.pack(side=tk.RIGHT, padx=5)
-        ttk.Label(multi_item_frame, text="Multi-Item Actions:").pack(anchor=tk.W)
-        self.bulk_rename_sel_button = ttk.Button(multi_item_frame, text="Bulk Rename Selected", command=self.action_bulk_rename_selected, state=tk.DISABLED)
-        self.bulk_rename_sel_button.pack(side=tk.LEFT, padx=2, pady=2)
-        self.bulk_reupload_sel_button = ttk.Button(multi_item_frame, text="Re-upload Selected", command=self.action_reupload_selected, state=tk.DISABLED)
-        self.bulk_reupload_sel_button.pack(side=tk.LEFT, padx=2, pady=2)
-        self.delete_sel_button = ttk.Button(multi_item_frame, text="Delete Selected", command=self.action_delete_selected, state=tk.DISABLED, style="Nuke.TButton")
-        self.delete_sel_button.pack(side=tk.LEFT, padx=2, pady=2)
+        multi_item_frame.pack(side=tk.LEFT, padx=15, fill=tk.X, expand=True)
+        ttk.Label(multi_item_frame, text="Selected Items Actions:").pack(anchor=tk.W, pady=(0,2))
+        multi_btn_row1 = ttk.Frame(multi_item_frame)
+        multi_btn_row1.pack(fill=tk.X)
+        self.bulk_rename_sel_button = ttk.Button(multi_btn_row1, text="Bulk Rename", command=self.action_bulk_rename_selected, state=tk.DISABLED)
+        self.bulk_rename_sel_button.pack(side=tk.LEFT, padx=2)
+        self.bulk_reupload_sel_button = ttk.Button(multi_btn_row1, text="Re-upload", command=self.action_reupload_selected, state=tk.DISABLED)
+        self.bulk_reupload_sel_button.pack(side=tk.LEFT, padx=2)
+        self.delete_exp_sel_button = ttk.Button(multi_btn_row1, text="Delete Export Files", command=self.action_delete_export_selected, state=tk.DISABLED)
+        self.delete_exp_sel_button.pack(side=tk.LEFT, padx=2)
+        self.delete_sel_button = ttk.Button(multi_btn_row1, text="Delete Entries", command=self.action_delete_selected, state=tk.DISABLED, style="Nuke.TButton")
+        self.delete_sel_button.pack(side=tk.LEFT, padx=2)
 
-        # Close button (Bottom Center)
-        close_button = ttk.Button(main_frame, text="Close", command=self.destroy)
-        close_button.pack(pady=10)
+
+        # Close button (Bottom Right)
+        close_button_frame = ttk.Frame(main_frame)
+        close_button_frame.grid(row=3, column=1, pady=(10,0), sticky="e")
+        close_button = ttk.Button(close_button_frame, text="Close", command=self.destroy)
+        close_button.pack()
 
         # --- Populate listbox AFTER all widgets are created ---
-        self.refresh_listbox() # Now safe to call
+        # Moved refresh_listbox call to the end after all buttons are defined
+        self.refresh_listbox()
+
 
     def on_listbox_select(self, event):
         """Updates details and enables/disables buttons based on selection."""
@@ -1263,6 +1646,7 @@ class EditWindow(tk.Toplevel):
         if not self.selected_indices:
             self.clear_details()
             self.disable_all_action_buttons()
+            self.clear_previews()
             return
 
         if len(self.selected_indices) == 1:
@@ -1274,11 +1658,13 @@ class EditWindow(tk.Toplevel):
                 self.detail_original_var.set(row_data[1])
                 self.detail_renamed_var.set(row_data[2])
                 self.detail_url_var.set(row_data[3] or "(none)")
-                self.enable_single_action_buttons()
+                self.enable_single_action_buttons(row_data[3]) # Pass URL to enable/disable remove URL
                 self.disable_multi_action_buttons()
+                self.load_previews(row_data[1], row_data[2]) # Load preview images
             except IndexError:
                 self.clear_details()
                 self.disable_all_action_buttons()
+                self.clear_previews()
                 log_status(logging.ERROR, f"Selected row {index+1} has invalid data.")
                 messagebox.showerror("Error", "Selected row has invalid data.", parent=self)
         else:
@@ -1287,6 +1673,7 @@ class EditWindow(tk.Toplevel):
             self.detail_original_var.set(f"({len(self.selected_indices)} items selected)") # Indicate multiple selection
             self.disable_single_action_buttons()
             self.enable_multi_action_buttons()
+            self.clear_previews()
 
     def clear_details(self):
         self.detail_ts_var.set("")
@@ -1300,28 +1687,80 @@ class EditWindow(tk.Toplevel):
 
     def disable_single_action_buttons(self):
         self.rename_button.config(state=tk.DISABLED)
-        self.reupload_button.config(state=tk.DISABLED)
+        self.upload_button.config(state=tk.DISABLED)
         self.editurl_button.config(state=tk.DISABLED)
-        # Keep delete separate as it might apply to single too? No, use multi-delete.
-        # self.delete_button.config(state=tk.DISABLED)
+        self.removeurl_button.config(state=tk.DISABLED)
+        self.delete_single_button.config(state=tk.DISABLED) # Disable single delete
 
-    def enable_single_action_buttons(self):
+
+    def enable_single_action_buttons(self, current_url):
         self.rename_button.config(state=tk.NORMAL)
         can_upload = self.uploads_enabled and self.api_key
-        self.reupload_button.config(state=tk.NORMAL if can_upload else tk.DISABLED)
+        self.upload_button.config(state=tk.NORMAL if can_upload else tk.DISABLED)
+        # Change text based on if URL exists
+        self.upload_button.config(text="Re-upload" if current_url else "Upload")
         self.editurl_button.config(state=tk.NORMAL)
-        # self.delete_button.config(state=tk.NORMAL)
+        self.removeurl_button.config(state=tk.NORMAL if current_url else tk.DISABLED) # Enable only if URL exists
+        self.delete_single_button.config(state=tk.NORMAL) # Enable single delete
+
 
     def disable_multi_action_buttons(self):
         self.bulk_rename_sel_button.config(state=tk.DISABLED)
         self.bulk_reupload_sel_button.config(state=tk.DISABLED)
         self.delete_sel_button.config(state=tk.DISABLED)
+        self.delete_exp_sel_button.config(state=tk.DISABLED)
 
     def enable_multi_action_buttons(self):
         self.bulk_rename_sel_button.config(state=tk.NORMAL)
         can_upload = self.uploads_enabled and self.api_key
         self.bulk_reupload_sel_button.config(state=tk.NORMAL if can_upload else tk.DISABLED)
         self.delete_sel_button.config(state=tk.NORMAL)
+        self.delete_exp_sel_button.config(state=tk.NORMAL)
+
+    def clear_previews(self):
+        self.import_image_label.config(image='', text="Select single item" if PIL_AVAILABLE else "Preview N/A")
+        self.export_image_label.config(image='', text="Select single item" if PIL_AVAILABLE else "Preview N/A")
+        self.import_photo = None
+        self.export_photo = None
+
+    def load_previews(self, original_name, renamed_name):
+        """Loads and displays preview images for the selected item."""
+        if not PIL_AVAILABLE:
+            return # Do nothing if Pillow is not installed
+
+        self.clear_previews() # Clear previous previews
+
+        # Load import image
+        import_path = os.path.join(self.import_path_base, original_name)
+        if os.path.exists(import_path):
+            try:
+                img = Image.open(import_path)
+                img.thumbnail((PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT))
+                self.import_photo = ImageTk.PhotoImage(img)
+                self.import_image_label.config(image=self.import_photo, text="")
+            except UnidentifiedImageError:
+                 self.import_image_label.config(image='', text="Cannot preview (format?)")
+            except Exception as e:
+                self.import_image_label.config(image='', text="Preview Error")
+                logger.warning(f"Error loading import preview '{import_path}': {e}")
+        else:
+            self.import_image_label.config(image='', text="Import file missing")
+
+        # Load export image
+        export_path = os.path.join(self.export_path_base, renamed_name)
+        if os.path.exists(export_path):
+            try:
+                img = Image.open(export_path)
+                img.thumbnail((PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT))
+                self.export_photo = ImageTk.PhotoImage(img)
+                self.export_image_label.config(image=self.export_photo, text="")
+            except UnidentifiedImageError:
+                 self.export_image_label.config(image='', text="Cannot preview (format?)")
+            except Exception as e:
+                self.export_image_label.config(image='', text="Preview Error")
+                logger.warning(f"Error loading export preview '{export_path}': {e}")
+        else:
+            self.export_image_label.config(image='', text="Export file missing")
 
 
     def save_csv_data(self):
@@ -1333,11 +1772,15 @@ class EditWindow(tk.Toplevel):
                 writer.writerows(self.data) # Write updated data
             log_status("SUCCESS", "CSV log updated successfully.")
             logger.info(f"CSV log saved successfully from Edit window.")
+            # Store the saved data as the new "original" state for potential reverts
+            self.original_data_on_load = [list(row) for row in self.data]
             return True
         except (IOError, csv.Error) as e:
             log_status(logging.ERROR, f"Failed to save updated CSV: {e}")
             messagebox.showerror("Save Error", f"Failed to save CSV:\n{e}", parent=self)
             logger.exception("CSV Save Error from Edit Window")
+            # Attempt to restore in-memory data from the last known good state
+            self.data = [list(row) for row in self.original_data_on_load]
             return False
 
     def refresh_listbox(self):
@@ -1366,20 +1809,28 @@ class EditWindow(tk.Toplevel):
              # Activate and see the first item in the new selection
              self.entry_listbox.activate(new_selection[0])
              self.entry_listbox.see(new_selection[0])
-             self.on_listbox_select(None) # Trigger detail update based on new selection
+             # Trigger update of details and buttons based on new selection
+             self.on_listbox_select(None)
         else:
              self.clear_details()
              self.disable_all_action_buttons()
+             self.clear_previews()
 
 
     # --- Action Methods for Edit Window ---
 
+    def get_selected_indices(self):
+        """Returns a sorted list of selected row indices."""
+        # Tkinter listbox curselection returns tuple, convert to list
+        return sorted(list(self.entry_listbox.curselection()))
+
+
     def action_rename(self):
-        # This action only makes sense for a single selection
-        if not self.selected_indices or len(self.selected_indices) != 1:
+        selected_indices = self.get_selected_indices()
+        if len(selected_indices) != 1:
              messagebox.showwarning("Action Error", "Please select exactly one item to rename.", parent=self)
              return
-        idx = self.selected_indices[0] # Get the single selected index
+        idx = selected_indices[0] # Get the single selected index
 
         current_renamed_name = self.data[idx][2]
         _, ext = os.path.splitext(current_renamed_name)
@@ -1389,7 +1840,7 @@ class EditWindow(tk.Toplevel):
                                                parent=self)
         if not new_name_base: return # User cancelled
 
-        new_renamed_name = f"{new_name_base}{ext}"
+        new_renamed_name = f"{new_name_base.strip()}{ext}"
         old_export_path = os.path.join(self.export_path_base, current_renamed_name)
         new_export_path = os.path.join(self.export_path_base, new_renamed_name)
 
@@ -1419,7 +1870,8 @@ class EditWindow(tk.Toplevel):
         # Optionally re-upload
         new_url = "" if not self.uploads_enabled else self.data[idx][3] # Default
         if renamed_locally and self.uploads_enabled:
-            if messagebox.askyesno("Re-upload?", f"File renamed to '{new_renamed_name}'.\nRe-upload to s-ul.eu?", parent=self):
+             reply = messagebox.askyesno("Re-upload?", f"File renamed to '{new_renamed_name}'.\nRe-upload to s-ul.eu?", parent=self)
+             if reply: # User clicked Yes
                 if not self.api_key: messagebox.showerror("Error", "API Key missing.", parent=self)
                 elif not os.path.exists(new_export_path): messagebox.showerror("Error", f"File not found: {new_export_path}", parent=self)
                 else:
@@ -1440,8 +1892,10 @@ class EditWindow(tk.Toplevel):
                         else: messagebox.showerror("Upload Failed", result["error"] or "Unknown upload error.", parent=self)
                     except queue.Empty:
                          messagebox.showerror("Upload Failed", "No result from upload thread.", parent=self)
-            else:
+             else:
                  new_url = self.data[idx][3] # Keep old URL
+        elif not self.uploads_enabled:
+             new_url = "" # Clear URL if uploads disabled
 
         # Update data and save
         self.data[idx][2] = new_renamed_name
@@ -1450,53 +1904,22 @@ class EditWindow(tk.Toplevel):
         if self.save_csv_data():
              self.refresh_listbox() # Refresh list display
 
-    def action_reupload(self):
-        # This action only makes sense for a single selection
-        if not self.selected_indices or len(self.selected_indices) != 1:
-             messagebox.showwarning("Action Error", "Please select exactly one item to re-upload.", parent=self)
+    def action_upload_single(self):
+        """Handles the 'Upload' or 'Re-upload' button click for a single item."""
+        selected_indices = self.get_selected_indices()
+        if len(selected_indices) != 1:
+             messagebox.showwarning("Action Error", "Please select exactly one item to upload/re-upload.", parent=self)
              return
-        idx = self.selected_indices[0]
-
-        if not self.uploads_enabled or not self.api_key:
-             messagebox.showerror("Error", "Uploads disabled or API Key missing.", parent=self)
-             return
-
-        renamed_name = self.data[idx][2]
-        file_path = os.path.join(self.export_path_base, renamed_name)
-        if not os.path.exists(file_path):
-             messagebox.showerror("Error", f"File not found: {file_path}", parent=self)
-             return
-
-        # Run upload in thread
-        upload_q = queue.Queue()
-        log_status(logging.INFO, f"Starting re-upload for {renamed_name}...")
-        thread = threading.Thread(target=upload_to_sul_thread, args=(file_path, self.api_key, upload_q), daemon=True)
-        thread.start()
-        self.master.config(cursor="watch") # Use master (main window) cursor
-        while thread.is_alive():
-            self.master.update()
-            time.sleep(0.1)
-        self.master.config(cursor="")
-        try:
-            result = upload_q.get_nowait()
-            if result["url"]:
-                # Update self.data before saving
-                self.data[idx][3] = result["url"]
-                self.data[idx][0] = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
-                if self.save_csv_data():
-                    self.refresh_listbox() # Refresh list display
-            else:
-                messagebox.showerror("Upload Failed", result["error"] or "Unknown upload error.", parent=self)
-        except queue.Empty:
-             messagebox.showerror("Upload Failed", "No result from upload thread.", parent=self)
-
+        idx = selected_indices[0]
+        self.action_reupload_selected_indices([idx]) # Call multi-upload logic
 
     def action_edit_url(self):
-        # This action only makes sense for a single selection
-        if not self.selected_indices or len(self.selected_indices) != 1:
+        # Single item URL edit
+        selected_indices = self.get_selected_indices()
+        if len(selected_indices) != 1:
              messagebox.showwarning("Action Error", "Please select exactly one item to edit its URL.", parent=self)
              return
-        idx = self.selected_indices[0]
+        idx = selected_indices[0]
 
         current_url = self.data[idx][3]
         new_url = simpledialog.askstring("Edit URL", "Enter new URL (blank to remove):",
@@ -1508,9 +1931,69 @@ class EditWindow(tk.Toplevel):
         if self.save_csv_data():
              self.refresh_listbox() # Refresh list display
 
+    def action_remove_url(self):
+        """Removes the URL for the selected single item."""
+        selected_indices = self.get_selected_indices()
+        if len(selected_indices) != 1:
+            messagebox.showwarning("Action Error", "Please select exactly one item to remove its URL.", parent=self)
+            return
+        idx = selected_indices[0]
+
+        if not self.data[idx][3]: # No URL to remove
+             messagebox.showinfo("Remove URL", "Selected item does not have a URL.", parent=self)
+             return
+
+        if messagebox.askyesno("Confirm Remove URL", "Are you sure you want to remove the URL for this entry?", parent=self):
+            self.data[idx][3] = "" # Clear URL
+            self.data[idx][0] = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f") # Update timestamp
+            if self.save_csv_data():
+                self.refresh_listbox()
+
+    def action_delete_export_selected(self):
+        """Deletes only the export file(s) for selected entries."""
+        selected_indices = self.get_selected_indices()
+        if not selected_indices:
+             messagebox.showwarning("Action Error", "Please select one or more items to delete their export files.", parent=self)
+             return
+
+        count = len(selected_indices)
+        if not messagebox.askyesno("Confirm Delete Export Files", f"Delete {count} export file(s) (from '{EXPORT_FOLDER}') for the selected entries?\n(This will NOT delete the CSV entry or import file)", icon='warning', parent=self):
+            return
+
+        deleted_count = 0
+        failed_count = 0
+        for idx in selected_indices:
+            try:
+                renamed_name = self.data[idx][2]
+                export_file_path = os.path.join(self.export_path_base, renamed_name)
+                if os.path.exists(export_file_path):
+                    try:
+                        os.remove(export_file_path)
+                        log_status("SUCCESS", f"Deleted export file: {export_file_path}")
+                        deleted_count += 1
+                    except OSError as e:
+                        log_status(logging.ERROR, f"Failed to delete export file {export_file_path}: {e}")
+                        messagebox.showerror("File Delete Error", f"Failed to delete:\n{export_file_path}\n{e}", parent=self)
+                        failed_count += 1
+                else:
+                    log_status(logging.WARNING, f"Export file not found, skipping delete: {export_file_path}")
+            except IndexError:
+                 log_status(logging.ERROR, f"Error processing index {idx} for export file deletion.")
+                 failed_count += 1
+            except Exception as e:
+                 log_status(logging.ERROR, f"Unexpected error during export file deletion for index {idx}: {e}")
+                 logger.exception(f"Export deletion error for index {idx}")
+                 failed_count += 1
+
+        summary = f"Deleted {deleted_count} export files."
+        if failed_count > 0:
+            summary += f"\nFailed to delete {failed_count} files (see log/status)."
+        messagebox.showinfo("Delete Export Files Complete", summary, parent=self)
+
+
     def action_delete_selected(self):
         """Deletes all currently selected entries."""
-        selected_indices = self.entry_listbox.curselection()
+        selected_indices = self.get_selected_indices() # Use helper
         if not selected_indices:
              messagebox.showwarning("Action Error", "Please select one or more items to delete.", parent=self)
              return
@@ -1521,8 +2004,7 @@ class EditWindow(tk.Toplevel):
 
         delete_files = messagebox.askyesno("Delete Files?", "Also delete corresponding local files (Import/Export)?", icon='question', parent=self)
 
-        # Important: Delete from the end of the list to avoid index shifting issues
-        indices_to_delete = sorted(list(selected_indices), reverse=True)
+        indices_to_delete = sorted(selected_indices, reverse=True)
         deleted_count_files = 0
         deleted_rows = 0
 
@@ -1546,13 +2028,11 @@ class EditWindow(tk.Toplevel):
                              except OSError as e:
                                  log_status(logging.ERROR, f"Failed to delete local file {file_path}: {e}")
                                  messagebox.showerror("File Delete Error", f"Failed to delete:\n{file_path}\n{e}", parent=self)
-                         else:
-                              logger.info(f"Local file not found for deletion, skipping: {file_path}")
 
                 # Remove row from data list
                 self.data.pop(idx)
                 deleted_rows += 1
-                logger.info(f"Removed item #{idx+1} ('{renamed_name}') from data list.")
+                logger.info(f"Removed item at original index {idx} ('{renamed_name}') from data list.")
 
             except IndexError:
                  log_status(logging.ERROR, f"Error processing index {idx} for deletion (index out of bounds?).")
@@ -1573,21 +2053,30 @@ class EditWindow(tk.Toplevel):
 
     def action_reupload_selected(self):
         """Re-uploads all selected items that have a file in export folder."""
-        selected_indices = self.entry_listbox.curselection()
+        selected_indices = self.get_selected_indices() # Use helper
         if not selected_indices:
              messagebox.showwarning("Action Error", "Please select one or more items to re-upload.", parent=self)
              return
+        self.action_reupload_selected_indices(selected_indices)
 
+
+    def action_reupload_selected_indices(self, indices_to_upload):
+        """Helper to re-upload specific indices."""
         if not self.uploads_enabled or not self.api_key:
              messagebox.showerror("Error", "Uploads disabled or API Key missing.", parent=self)
              return
 
         items_to_upload = []
-        for idx in selected_indices:
+        items_with_urls = [] # Track items that already have URLs
+        for idx in indices_to_upload:
              try:
                  renamed_name = self.data[idx][2]
                  file_path = os.path.join(self.export_path_base, renamed_name)
+                 current_url = self.data[idx][3]
+
                  if os.path.exists(file_path):
+                      if current_url:
+                           items_with_urls.append(renamed_name) # Add to list for confirmation
                       items_to_upload.append({"index": idx, "file_path": file_path, "renamed_name": renamed_name})
                  else:
                       log_status(logging.WARNING, f"Skipping re-upload for '{renamed_name}': File not found.")
@@ -1597,6 +2086,16 @@ class EditWindow(tk.Toplevel):
         if not items_to_upload:
              messagebox.showinfo("Re-upload", "No valid files found for selected entries to re-upload.", parent=self)
              return
+
+        # Confirm overwrite if any selected items already have URLs
+        if items_with_urls:
+             confirm_msg = f"The following selected item(s) already have URLs:\n\n"
+             confirm_msg += "\n".join(f"- {name}" for name in items_with_urls[:5]) # Show first 5
+             if len(items_with_urls) > 5: confirm_msg += "\n..."
+             confirm_msg += "\n\nRe-uploading will overwrite existing URLs. Continue?"
+             if not messagebox.askyesno("Confirm Re-upload", confirm_msg, parent=self):
+                  log_status(logging.INFO, "Re-upload cancelled by user due to existing URLs.")
+                  return
 
         log_status(logging.INFO, f"Starting re-upload for {len(items_to_upload)} selected items...")
 
@@ -1610,16 +2109,18 @@ class EditWindow(tk.Toplevel):
             threads.append(thread)
             thread.start()
 
-        # Monitor results
+        # Monitor results (using a progress dialog might be better here)
         total_files = len(threads)
         completed_files = 0
         successful_uploads = 0
         failed_uploads = 0
         updated_indices = []
 
+        # Simple blocking wait loop (can freeze GUI slightly, better with QProgressDialog)
+        self.master.config(cursor="watch")
         while completed_files < total_files:
             try:
-                result = upload_queue.get(timeout=1.0)
+                result = upload_queue.get(timeout=0.1) # Short timeout
                 completed_files += 1
                 original_index = -1
                 for item in items_to_upload:
@@ -1640,10 +2141,14 @@ class EditWindow(tk.Toplevel):
                      log_status(logging.ERROR, f"Could not map result file {result['file']} back to index.")
                      failed_uploads += 1
                 log_status(logging.INFO, f"Re-upload progress: {completed_files}/{total_files}")
+                self.master.update() # Process GUI events during wait
 
             except queue.Empty:
-                if not any(t.is_alive() for t in threads): break
+                self.master.update() # Process GUI events
+                if not any(t.is_alive() for t in threads): break # Exit if threads died
                 continue
+
+        self.master.config(cursor="") # Restore cursor
 
         # Save CSV if changes were made
         if updated_indices:
@@ -1656,9 +2161,9 @@ class EditWindow(tk.Toplevel):
 
     def action_bulk_rename_selected(self):
         """Bulk renames selected items sequentially."""
-        selected_indices = self.entry_listbox.curselection()
+        selected_indices = self.get_selected_indices() # Use helper
         if not selected_indices:
-             messagebox.showwarning("Action Error", "Please select two or more items to bulk rename.", parent=self)
+             messagebox.showwarning("Action Error", "Please select one or more items to bulk rename.", parent=self)
              return
 
         base_name = simpledialog.askstring("Bulk Rename Selected", "Enter base name (e.g., IMAGE):", parent=self)
@@ -1679,7 +2184,7 @@ class EditWindow(tk.Toplevel):
              messagebox.showerror("Error", "No valid items selected for renaming.", parent=self)
              return
 
-        # Sort by original index to maintain some order if desired, though numbering is sequential
+        # Sort by original index to process in table order
         items_to_rename.sort(key=lambda x: x["index"])
 
         start_number = 1
@@ -1713,9 +2218,7 @@ class EditWindow(tk.Toplevel):
 
         if not valid_process: return
 
-        # Pass 2 & 3: Perform renames (similar logic to run_bulk_rename_existing_thread)
-        # This part runs synchronously within the EditWindow for simplicity,
-        # could be threaded if dealing with huge selections.
+        # Pass 2 & 3: Perform renames (synchronous for simplicity in dialog)
         rename_log_list = []
         for rename_info in potential_renames:
             old_path, new_path = rename_info["old_path"], rename_info["new_path"]
@@ -1796,6 +2299,13 @@ def run_bulk_rename_existing_thread(config):
     if header_clean is None or not data:
         log_status(logging.ERROR if header_clean is None else logging.INFO,
                    "Bulk Rename: Could not read CSV or no entries found.")
+        # Emit finished signal with error status or empty result
+        if UploaderApp.instance: # Check if main app instance exists
+             # Need to define the signal on the worker instance before emitting
+             # This structure needs adjustment - signals belong to QObject/QThread
+             # For simplicity, we'll log and show messagebox from thread end
+             # UploaderApp.instance.bulk_rename_worker.signals.finished.emit({"error": "Could not read CSV or no entries found."})
+             log_status(logging.ERROR, "Bulk Rename Error: Could not read CSV or no entries found.")
         return
 
     # --- Get base name via queue/callback ---
@@ -1818,6 +2328,8 @@ def run_bulk_rename_existing_thread(config):
 
     if not base_name:
         log_status(logging.WARNING, "Bulk Rename cancelled by user or failed to get base name.")
+        # if UploaderApp.instance: # Check if main app instance exists
+        #      UploaderApp.instance.bulk_rename_worker.signals.finished.emit({"message": "Operation cancelled."}) # Signal completion
         return
     # --- End Get base name ---
 
@@ -1825,15 +2337,10 @@ def run_bulk_rename_existing_thread(config):
     num_digits = len(str(len(data) + start_number - 1))
     log_status(logging.INFO, f"Bulk renaming {len(data)} items using base '{base_name}' starting from {start_number:0{num_digits}d}...")
 
-    renamed_count = 0
-    skipped_count = 0
-    error_count = 0
-    temp_export_files = {}
-    potential_renames = []
-    target_filenames = set()
+    renamed_count = 0; skipped_count = 0; error_count = 0
+    temp_export_files = {}; potential_renames = []; target_filenames = set()
     valid_process = True
 
-    # Define column indices
     try:
         ts_idx, orig_idx, renamed_idx, url_idx = 0, 1, 2, 3
         if not (header_clean[ts_idx] == "Timestamp" and header_clean[orig_idx] == "Original" and
@@ -1841,124 +2348,91 @@ def run_bulk_rename_existing_thread(config):
             raise ValueError("CSV header mismatch")
     except (IndexError, ValueError):
         log_status(logging.ERROR,"Bulk rename aborted: CSV header mismatch.")
+        # if UploaderApp.instance:
+        #      UploaderApp.instance.bulk_rename_worker.signals.error.emit("Bulk Rename Error", "CSV header mismatch.")
         return
 
-    # Pass 1: Check for conflicts
+    # Pass 1
     for i, row in enumerate(data):
         try:
             old_renamed_name = row[renamed_idx]
-            _, ext = os.path.splitext(old_renamed_name)
-            ext = ext if ext else ""
+            _, ext = os.path.splitext(old_renamed_name); ext = ext if ext else ""
             new_filename_base = f"{base_name}{i + start_number:0{num_digits}d}"
             new_filename = f"{new_filename_base}{ext}"
-
             if new_filename in target_filenames:
-                 log_status(logging.ERROR, f"Conflict detected: Multiple items would be renamed to '{new_filename}'. Aborting.")
-                 valid_process = False
-                 break
+                log_status(logging.ERROR, f"Conflict detected: Multiple items target '{new_filename}'. Aborting.")
+                # if UploaderApp.instance:
+                #      UploaderApp.instance.bulk_rename_worker.signals.error.emit("Bulk Rename Error", f"Conflict detected: Multiple items target '{new_filename}'.")
+                valid_process = False; break
             target_filenames.add(new_filename)
             potential_renames.append({
                 "index": i, "old_name": old_renamed_name, "new_name": new_filename,
                 "old_path": os.path.join(export_path_base, old_renamed_name),
-                "new_path": os.path.join(export_path_base, new_filename)
-            })
-        except IndexError:
-            log_status(logging.ERROR, f"Skipping row {i+1} due to incorrect column count.")
-            skipped_count += 1
+                "new_path": os.path.join(export_path_base, new_filename)})
+        except IndexError: skipped_count += 1; logger.warning(f"Skipping row {i+1} due to column count.")
 
     if not valid_process: return
 
-    # Pass 2: Perform initial renames (use temp if target exists)
-    final_data = [list(row) for row in data] # Mutable copy
+    # Pass 2 & 3
+    final_data = [list(row) for row in data]
     rename_log = []
     for rename_info in potential_renames:
         old_path, new_path = rename_info["old_path"], rename_info["new_path"]
         old_name, new_name = rename_info["old_name"], rename_info["new_name"]
         item_index = rename_info["index"]
-
-        if not os.path.exists(old_path):
-            log_status(logging.WARNING, f"Skipping '{old_name}': File not found.")
-            skipped_count += 1
-            continue
-        if old_path == new_path:
-            log_status(logging.INFO, f"Skipping '{old_name}': Name already correct.")
-            continue
-
+        if not os.path.exists(old_path): skipped_count += 1; continue
+        if old_path == new_path: continue
         temp_path = None
-        if os.path.exists(new_path):
-            temp_suffix = f"__bulk_rename_temp_{datetime.now().strftime('%f')}"
-            temp_path = old_path + temp_suffix
-            try:
-                os.rename(old_path, temp_path)
-                logger.info(f"Renamed '{old_name}' to temporary '{os.path.basename(temp_path)}'.")
-                temp_export_files[new_path] = temp_path
+        try:
+            if os.path.exists(new_path):
+                temp_suffix = f"__bulk_rename_temp_{datetime.now().strftime('%f')}"
+                temp_path = old_path + temp_suffix
+                os.rename(old_path, temp_path); temp_export_files[new_path] = temp_path
                 rename_info["status"] = "pending_temp"
-            except OSError as e:
-                log_status(logging.ERROR, f"Failed to rename '{old_name}' to temp path: {e}")
-                error_count += 1
-                rename_info["status"] = "error"
-                continue
-        else:
-            try:
-                os.rename(old_path, new_path)
-                rename_log.append(f"'{old_name}' -> '{new_name}'")
-                logger.info(f"Bulk rename: Renamed '{old_name}' to '{new_name}'.")
-                renamed_count += 1
-                rename_info["status"] = "renamed"
-            except OSError as e:
-                log_status(logging.ERROR, f"Failed to rename '{old_name}' to '{new_name}': {e}")
-                error_count += 1
-                rename_info["status"] = "error"
-                continue
+            else:
+                os.rename(old_path, new_path); renamed_count += 1; rename_info["status"] = "renamed"
+            final_data[item_index][renamed_idx] = new_name
+            final_data[item_index][ts_idx] = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+        except OSError as e: error_count += 1; logger.error(f"Rename error for {old_name}: {e}")
 
-        # Update final_data only if rename (direct or temp) was initiated
-        final_data[item_index][renamed_idx] = new_name
-        final_data[item_index][ts_idx] = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
-
-    # Pass 3: Rename temporary files
     temp_rename_errors = 0
     for final_target_path, temp_source_path in temp_export_files.items():
         try:
             os.rename(temp_source_path, final_target_path)
-            temp_base = os.path.basename(temp_source_path)
-            final_base = os.path.basename(final_target_path)
-            rename_log.append(f"'{temp_base}' (temp) -> '{final_base}'")
-            logger.info(f"Bulk rename: Finalized '{final_base}'.")
-            # Update status from pending_temp to renamed
             for info in potential_renames:
-                if info.get("status") == "pending_temp" and info["new_path"] == final_target_path:
-                    info["status"] = "renamed"
-                    renamed_count += 1
-                    break
+                 if info.get("status") == "pending_temp" and info["new_path"] == final_target_path:
+                      info["status"] = "renamed"; renamed_count += 1; break
         except OSError as e:
-            log_status(logging.ERROR, f"Failed to rename temp file '{temp_source_path}' to '{final_target_path}': {e}")
-            temp_rename_errors += 1
-            error_count += 1
-            # Revert name in final_data if temp rename failed
+            temp_rename_errors += 1; error_count += 1
+            logger.error(f"Failed to rename temp file {temp_source_path} to {final_target_path}: {e}")
             for info in potential_renames:
-                if info.get("status") == "pending_temp" and info["new_path"] == final_target_path:
-                    final_data[info["index"]][renamed_idx] = info["old_name"]
-                    break
+                 if info.get("status") == "pending_temp" and info["new_path"] == final_target_path:
+                      final_data[info["index"]][renamed_idx] = info["old_name"]; break
 
     # Save final data
-    if renamed_count > 0 or skipped_count > 0 or error_count > 0:
+    if renamed_count > 0 or error_count > 0: # Only save if changes or errors occurred
         log_status(logging.INFO, "Saving updated names to CSV...")
         try:
             with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
-                writer = csv.writer(csvfile)
-                writer.writerow(header_clean)
-                writer.writerows(final_data)
+                writer = csv.writer(csvfile); writer.writerow(header_clean); writer.writerows(final_data)
             log_status("SUCCESS", "CSV log updated successfully.")
         except (IOError, csv.Error) as e:
             log_status(logging.ERROR, f"Failed to save updated CSV after bulk rename: {e}")
+            # if UploaderApp.instance:
+            #     UploaderApp.instance.bulk_rename_worker.signals.error.emit("CSV Save Error", f"Failed to save updated CSV: {e}")
 
-    # Summary
+
+    result_data = {"renamed_count": renamed_count, "skipped_count": skipped_count, "error_count": error_count}
+    # if UploaderApp.instance:
+         # UploaderApp.instance.bulk_rename_worker.signals.finished.emit(result_data)
+    # Since this runs in a basic thread, show results via log_status/messagebox from here
     log_status("PRINT", "\n--- Bulk Rename Summary ---")
     log_status("PRINT", f"Total CSV Entries Processed: {len(data)}")
     log_status("SUCCESS", f"Files Successfully Renamed: {renamed_count}")
     if skipped_count > 0: log_status("WARNING", f"Files Skipped: {skipped_count}")
     if error_count > 0: log_status("ERROR", f"Errors During Rename: {error_count}")
     logger.info(f"Bulk Rename Existing summary: Total={len(data)}, Renamed={renamed_count}, Skipped={skipped_count}, Errors={error_count}")
+    # Can't reliably show messagebox from thread, rely on status log
 
 
 # --- Bulk Upload Function ---
@@ -1973,109 +2447,126 @@ def bulk_upload_from_csv_thread(config):
 
     if not uploads_enabled or not api_key:
         log_status(logging.WARNING, "Bulk Upload skipped: Uploads disabled or API Key missing.")
+        # if UploaderApp.instance: UploaderApp.instance.bulk_upload_worker.signals.finished.emit({"message": "Uploads disabled or API Key missing."})
         return
 
     header, data = get_csv_data(csv_path)
     if header is None or not data:
         log_status(logging.ERROR if header is None else logging.INFO,
                    "Bulk Upload: Could not read CSV or no entries found.")
+        # if UploaderApp.instance: UploaderApp.instance.bulk_upload_worker.signals.finished.emit({"message": "Could not read CSV or no entries found."})
         return
 
     log_status(logging.INFO, f"Bulk Upload: Found {len(data)} entries. Checking files...")
 
     items_to_upload = []
+    skipped_has_url = 0; skipped_missing = 0
     try:
         ts_idx, orig_idx, renamed_idx, url_idx = 0, 1, 2, 3
         if not (header[ts_idx] == "Timestamp" and header[orig_idx] == "Original" and
                 header[renamed_idx] == "Renamed" and header[url_idx] == "URL"):
             raise ValueError("CSV header mismatch")
-
         for idx, row in enumerate(data):
-            renamed_name = row[renamed_idx]
-            current_url = row[url_idx]
+            renamed_name = row[renamed_idx]; current_url = row[url_idx]
             file_path = os.path.join(export_path_base, renamed_name)
-            if not current_url and os.path.exists(file_path):
-                items_to_upload.append({"index": idx, "file_path": file_path, "renamed_name": renamed_name})
-            elif current_url:
-                 logger.info(f"Bulk Upload: Skipping '{renamed_name}' (already has URL).")
-            elif not os.path.exists(file_path):
-                 log_status(logging.WARNING, f"Bulk Upload: Skipping '{renamed_name}' (file not found).")
-
+            if not current_url and os.path.exists(file_path): items_to_upload.append({"index": idx, "file_path": file_path, "renamed_name": renamed_name})
+            elif current_url: skipped_has_url += 1
+            elif not os.path.exists(file_path): skipped_missing += 1; log_status(logging.WARNING, f"Bulk Upload: Skipping '{renamed_name}' (file not found).")
     except (IndexError, ValueError) as e:
         log_status(logging.ERROR, f"Bulk Upload aborted: CSV header mismatch or row error: {e}")
+        # if UploaderApp.instance: UploaderApp.instance.bulk_upload_worker.signals.error.emit("Bulk Upload Error", f"CSV header mismatch or row error: {e}")
         return
 
     if not items_to_upload:
         log_status(logging.INFO, "Bulk Upload: No items found needing upload.")
+        # if UploaderApp.instance: UploaderApp.instance.bulk_upload_worker.signals.finished.emit({"message": "No items found needing upload."})
         return
 
     log_status(logging.INFO, f"Bulk Upload: Starting upload for {len(items_to_upload)} items...")
 
-    # Upload in threads
     upload_queue = queue.Queue()
     threads = []
     for item in items_to_upload:
-        thread = threading.Thread(target=upload_to_sul_thread,
-                                  args=(item["file_path"], api_key, upload_queue),
-                                  daemon=True)
-        threads.append(thread)
-        thread.start()
+        thread = threading.Thread(target=upload_to_sul_thread, args=(item["file_path"], api_key, upload_queue), daemon=True)
+        threads.append(thread); thread.start()
 
-    # Monitor results
-    total_files = len(threads)
-    completed_files = 0
-    successful_uploads = 0
-    failed_uploads = 0
-    updated_indices = [] # Track indices in original 'data' that were updated
-
+    total_files = len(threads); completed_files = 0; successful_uploads = 0; failed_uploads = 0; updated_indices = []
     while completed_files < total_files:
         try:
-            result = upload_queue.get(timeout=1.0) # Wait up to 1 sec for a result
+            result = upload_queue.get(timeout=0.2)
             completed_files += 1
-            # Find original index
-            original_index = -1
-            for item in items_to_upload:
-                 if item["renamed_name"] == result["file"]:
-                      original_index = item["index"]
-                      break
-
+            original_index = next((item["index"] for item in items_to_upload if item["renamed_name"] == result["file"]), -1)
             if original_index != -1:
                 if result["url"]:
-                    successful_uploads += 1
-                    data[original_index][3] = result["url"] # Update URL in main data list
-                    data[original_index][0] = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f") # Update timestamp
-                    updated_indices.append(original_index)
-                else:
-                    failed_uploads += 1
-                    log_status(logging.ERROR, f"Bulk Upload: Failed for {result['file']}: {result['error']}")
-            else:
-                 log_status(logging.ERROR, f"Bulk Upload: Could not find original index for uploaded file {result['file']}")
-                 failed_uploads +=1 # Count as failed if we can't map it back
-
+                    successful_uploads += 1; data[original_index][3] = result["url"]
+                    data[original_index][0] = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"); updated_indices.append(original_index)
+                else: failed_uploads += 1; log_status(logging.ERROR, f"Bulk Upload: Failed for {result['file']}: {result['error']}")
+            else: failed_uploads += 1; log_status(logging.ERROR, f"Bulk Upload: Could not map result file {result['file']} back to index.")
             log_status(logging.INFO, f"Bulk Upload progress: {completed_files}/{total_files}")
-
         except queue.Empty:
-            # Check if threads are still running
-            if not any(t.is_alive() for t in threads):
-                log_status(logging.WARNING, "Bulk Upload: Upload queue empty but threads finished unexpectedly.")
-                break # Exit if threads died
-            continue # Continue waiting if threads are alive
+            if not any(t.is_alive() for t in threads): break
+            time.sleep(0.1)
 
-    # Save CSV if changes were made
     if updated_indices:
         log_status(logging.INFO, "Bulk Upload: Saving updated CSV...")
         try:
             with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
-                writer = csv.writer(csvfile)
-                writer.writerow(header)
-                writer.writerows(data)
+                writer = csv.writer(csvfile); writer.writerow(header); writer.writerows(data)
             log_status("SUCCESS", "Bulk Upload: CSV log updated successfully.")
         except (IOError, csv.Error) as e:
             log_status(logging.ERROR, f"Bulk Upload: Failed to save updated CSV: {e}")
-            logger.exception("Bulk Upload CSV Save Error")
+            # if UploaderApp.instance: UploaderApp.instance.bulk_upload_worker.signals.error.emit("CSV Save Error", f"Bulk Upload: Failed to save updated CSV: {e}")
 
-    log_status(logging.INFO, f"Bulk Upload finished. Successful: {successful_uploads}, Failed: {failed_uploads}.")
-    messagebox.showinfo("Bulk Upload Complete", f"Bulk Upload Finished.\nSuccessful: {successful_uploads}\nFailed: {failed_uploads}")
+
+    result_data = {"successful_uploads": successful_uploads, "failed_uploads": failed_uploads, "skipped_has_url": skipped_has_url, "skipped_missing": skipped_missing, "updated_rows": len(updated_indices)}
+    # Show results via messagebox scheduled in main thread
+    if UploaderApp.instance:
+        summary = f"Bulk Upload Finished.\nSuccessful: {successful_uploads}\nFailed: {failed_uploads}\nSkipped (URL): {skipped_has_url}\nSkipped (Missing): {skipped_missing}\nCSV Rows Updated: {len(updated_indices)}"
+        UploaderApp.instance.root.after(0, lambda: messagebox.showinfo("Bulk Upload Complete", summary))
+    # if UploaderApp.instance: UploaderApp.instance.bulk_upload_worker.signals.finished.emit(result_data)
+
+
+# --- Custom Rename Dialog Class ---
+class RenameDialog(simpledialog.Dialog):
+    def __init__(self, parent, original_filename, image_path):
+        self.original_filename = original_filename
+        self.image_path = image_path
+        self.new_name_base = None # Store result here
+        self.img_preview = None # To hold PhotoImage reference
+        super().__init__(parent, title="Rename File")
+
+    def body(self, master):
+        ttk.Label(master, text=f"Original: {self.original_filename}", wraplength=350).pack(pady=5)
+
+        # Image Preview
+        if PIL_AVAILABLE:
+            # Removed fixed width/height from ttk.Label
+            preview_label = ttk.Label(master, text="Loading preview...", relief="sunken", anchor="center")
+            preview_label.pack(pady=5)
+            try:
+                if os.path.exists(self.image_path):
+                    img = Image.open(self.image_path)
+                    img.thumbnail((PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT - 50)) # Adjust size for dialog
+                    self.img_preview = ImageTk.PhotoImage(img)
+                    preview_label.config(image=self.img_preview, text="")
+                else:
+                    preview_label.config(text="Import file missing")
+            except UnidentifiedImageError:
+                 preview_label.config(text="Cannot preview (format?)")
+            except Exception as e:
+                preview_label.config(text="Preview Error")
+                logger.warning(f"Error loading preview in dialog '{self.image_path}': {e}")
+        else:
+             ttk.Label(master, text="Image preview requires Pillow (pip install Pillow)").pack(pady=5)
+
+
+        ttk.Label(master, text="Enter new name (no extension, blank to keep original):").pack()
+        self.entry = ttk.Entry(master, width=50)
+        self.entry.pack(pady=5)
+        return self.entry # initial focus
+
+    def apply(self):
+        self.new_name_base = self.entry.get() # Store the entered value
 
 
 # --- Main Execution Block ---
@@ -2102,7 +2593,7 @@ if __name__ == "__main__":
         traceback.print_exc()
         try: logger.critical(f"An unexpected critical error occurred: {e}", exc_info=True)
         except: pass
-        input("Critical error occurred. Press Enter to exit.")
+        input("Critical error occurred. Check log file if possible. Exiting.")
     finally:
         try:
             logger.info("="*30 + " Script Execution Finished " + "="*30 + "\n")
@@ -2112,7 +2603,5 @@ if __name__ == "__main__":
                     logger.removeHandler(handler)
                 except Exception: pass
         except Exception: pass
-        if colorama:
-            try: colorama.deinit()
-            except Exception: pass
+        # No need to deinit colorama for PyQt
 
