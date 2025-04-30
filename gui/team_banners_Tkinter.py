@@ -537,7 +537,7 @@ class UploaderApp:
 
     def run_problem_fixer_script(self):
         """Launches the problem_fixer.py script as a separate process."""
-        fixer_script_name = "problem_solver.py"
+        fixer_script_name = "problem_solver_util_thing.py"
         # Construct the path relative to the main script's directory
         script_dir = os.path.dirname(os.path.abspath(__file__))
         fixer_script_path = os.path.join(script_dir, fixer_script_name)
