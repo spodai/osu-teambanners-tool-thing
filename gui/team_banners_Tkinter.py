@@ -557,141 +557,178 @@ class UploaderApp:
             messagebox.showerror("Launch Error", f"Failed to launch the fixer script:\n{e}")
             logger.exception("Problem Fixer launch error")
 
-# --- GUI Creation Methods ---
+    # --- GUI Creation Methods ---
     def create_widgets(self):
-        # Main frame using grid
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky="nsew") # Use grid for main frame
-        # Configure grid weights for the new layout
-        main_frame.columnconfigure(0, weight=2, minsize=450) # Config/Actions column (wider minsize)
-        main_frame.columnconfigure(1, weight=3) # Stats/Status column (wider)
-        main_frame.rowconfigure(0, weight=0) # Config/Stats row (fixed height)
-        main_frame.rowconfigure(1, weight=1) # Actions/Status row (expandable)
+        # Define consistent padding
+        PAD_X = 5
+        PAD_Y = 5
+        FRAME_PAD = 10 # Padding inside LabelFrames
+        INTER_FRAME_PADX = (0, 5) # Pad between left and right frames
+        INTER_FRAME_PADY = (0, 5) # Pad between top and bottom frames
 
+        # Main frame using grid
+        main_frame = ttk.Frame(self.root, padding=FRAME_PAD)
+        main_frame.grid(row=0, column=0, sticky="nsew")
+        # Make main_frame's container (the root window) expandable
+        # Ensure these lines are run *outside* create_widgets, maybe in __init__ after root creation:
+        # self.root.columnconfigure(0, weight=1)
+        # self.root.rowconfigure(0, weight=1)
+        # It's okay if they are here too, but logically belong in __init__
+
+        # Configure grid weights for the 2x2 layout within main_frame
+        main_frame.columnconfigure(0, weight=2, minsize=420) # Config/Actions column
+        main_frame.columnconfigure(1, weight=3)             # Stats/Status column
+        main_frame.rowconfigure(0, weight=0)                # Config/Stats row (fixed height)
+        main_frame.rowconfigure(1, weight=1)                # Actions/Status row (expandable)
 
         # --- Configuration Frame (Top-Left) ---
-        config_frame = ttk.LabelFrame(main_frame, text="Configuration", padding="10")
-        config_frame.grid(row=0, column=0, padx=(0, 5), pady=(0, 5), sticky="nsew") # Changed sticky
+        config_frame = ttk.LabelFrame(main_frame, text="Configuration", padding=FRAME_PAD)
+        config_frame.grid(row=0, column=0, padx=INTER_FRAME_PADX, pady=INTER_FRAME_PADY, sticky="nsew")
         config_frame.columnconfigure(1, weight=1) # Make entry fields expand
 
-        ttk.Label(config_frame, text="Google Drive ID/URL:").grid(row=0, column=0, padx=5, pady=2, sticky=tk.W)
-        drive_entry = ttk.Entry(config_frame, textvariable=self.drive_id_var, width=40) # Adjust width
-        drive_entry.grid(row=0, column=1, columnspan=2, padx=5, pady=2, sticky=tk.EW)
+        ttk.Label(config_frame, text="Google Drive ID/URL:").grid(row=0, column=0, padx=PAD_X, pady=PAD_Y, sticky=tk.W)
+        drive_entry = ttk.Entry(config_frame, textvariable=self.drive_id_var, width=40)
+        drive_entry.grid(row=0, column=1, columnspan=2, padx=PAD_X, pady=PAD_Y, sticky=tk.EW)
 
-        ttk.Label(config_frame, text="S-UL API Key:").grid(row=1, column=0, padx=5, pady=2, sticky=tk.W)
-        self.api_key_entry = ttk.Entry(config_frame, textvariable=self.api_key_var, width=40, show="*") # Store reference
-        self.api_key_entry.grid(row=1, column=1, columnspan=2, padx=5, pady=2, sticky=tk.EW)
+        ttk.Label(config_frame, text="S-UL API Key:").grid(row=1, column=0, padx=PAD_X, pady=PAD_Y, sticky=tk.W)
+        self.api_key_entry = ttk.Entry(config_frame, textvariable=self.api_key_var, width=40, show="*")
+        self.api_key_entry.grid(row=1, column=1, columnspan=2, padx=PAD_X, pady=PAD_Y, sticky=tk.EW)
 
-        ttk.Label(config_frame, text="Base Directory:").grid(row=2, column=0, padx=5, pady=2, sticky=tk.W)
+        ttk.Label(config_frame, text="Base Directory:").grid(row=2, column=0, padx=PAD_X, pady=PAD_Y, sticky=tk.W)
         base_dir_entry = ttk.Entry(config_frame, textvariable=self.base_dir_var, width=40)
-        base_dir_entry.grid(row=2, column=1, padx=5, pady=2, sticky=tk.EW)
-        browse_button = ttk.Button(config_frame, text="Browse...", command=self.browse_base_dir, width=8) # Fixed width
-        browse_button.grid(row=2, column=2, padx=5, pady=2, sticky=tk.E)
+        base_dir_entry.grid(row=2, column=1, padx=PAD_X, pady=PAD_Y, sticky=tk.EW)
+        browse_button = ttk.Button(config_frame, text="Browse...", command=self.browse_base_dir, width=8)
+        browse_button.grid(row=2, column=2, padx=PAD_X, pady=PAD_Y, sticky=tk.E)
 
         # --- Toggles Frame ---
         toggles_frame = ttk.Frame(config_frame)
-        toggles_frame.grid(row=3, column=0, columnspan=3, pady=5, sticky=tk.W)
-
+        toggles_frame.grid(row=3, column=0, columnspan=3, padx=PAD_X, pady=PAD_Y, sticky=tk.W)
         self.log_check = ttk.Checkbutton(toggles_frame, text="Enable Logging", variable=self.enable_logging_var, command=self.toggle_logging)
-        self.log_check.pack(side=tk.LEFT, padx=(0,10))
-
+        self.log_check.pack(side=tk.LEFT, padx=(0, 10))
         self.upload_check = ttk.Checkbutton(toggles_frame, text="Enable Uploads", variable=self.enable_upload_var, command=self.toggle_uploads)
-        self.upload_check.pack(side=tk.LEFT, padx=10)
+        self.upload_check.pack(side=tk.LEFT)
 
-        # Save Config Button
+        # --- Save Config Button ---
         save_button = ttk.Button(config_frame, text="Save Configuration", command=self.save_config_action_with_popup)
-        save_button.grid(row=4, column=0, columnspan=3, pady=10)
+        save_button.grid(row=4, column=0, columnspan=3, padx=PAD_X, pady=PAD_Y, sticky=tk.EW)
 
-        # --- Stats Frame (Top-Right) --- Swapped with Actions
-        stats_frame = ttk.LabelFrame(main_frame, text="Stats", padding="10")
-        stats_frame.grid(row=0, column=1, padx=(5, 0), pady=(0, 5), sticky="nsew")
-        stats_frame.columnconfigure(1, weight=0) # Status indicator column fixed width
+        # --- Stats Frame (Top-Right) ---
+        stats_frame = ttk.LabelFrame(main_frame, text="Stats", padding=FRAME_PAD)
+        stats_frame.grid(row=0, column=1, padx=INTER_FRAME_PADX, pady=INTER_FRAME_PADY, sticky="nsew")
+        stats_frame.columnconfigure(1, weight=0) # Status indicator column fixed width via Label width
         stats_frame.columnconfigure(2, weight=1) # Text label expands
 
-        ttk.Label(stats_frame, textvariable=self.total_entries_var).grid(row=0, column=0, columnspan=3, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(stats_frame, textvariable=self.total_entries_var).grid(row=0, column=0, columnspan=3, sticky=tk.W, padx=PAD_X, pady=PAD_Y)
 
-        ttk.Label(stats_frame, text="Import Files:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
-        self.import_status_label = ttk.Label(stats_frame, textvariable=self.import_status_var, width=6, anchor="center", relief="sunken", foreground="grey") # Increased width
-        self.import_status_label.grid(row=1, column=1, sticky=tk.W, padx=5)
-        ttk.Label(stats_frame, textvariable=self.import_files_var).grid(row=1, column=2, sticky=tk.W, padx=5)
+        ttk.Label(stats_frame, text="Import Files:").grid(row=1, column=0, sticky=tk.W, padx=PAD_X, pady=PAD_Y)
+        self.import_status_label = ttk.Label(stats_frame, textvariable=self.import_status_var, width=5, anchor="center", relief="groove", borderwidth=1) # Style like screenshot
+        self.import_status_label.grid(row=1, column=1, sticky="ew", padx=PAD_X, pady=PAD_Y) # Let it stretch horizontally slightly
+        ttk.Label(stats_frame, textvariable=self.import_files_var).grid(row=1, column=2, sticky=tk.W, padx=PAD_X, pady=PAD_Y)
 
-        ttk.Label(stats_frame, text="Export Files:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
-        self.export_status_label = ttk.Label(stats_frame, textvariable=self.export_status_var, width=6, anchor="center", relief="sunken", foreground="grey") # Increased width
-        self.export_status_label.grid(row=2, column=1, sticky=tk.W, padx=5)
-        ttk.Label(stats_frame, textvariable=self.export_files_var).grid(row=2, column=2, sticky=tk.W, padx=5)
+        ttk.Label(stats_frame, text="Export Files:").grid(row=2, column=0, sticky=tk.W, padx=PAD_X, pady=PAD_Y)
+        self.export_status_label = ttk.Label(stats_frame, textvariable=self.export_status_var, width=5, anchor="center", relief="groove", borderwidth=1)
+        self.export_status_label.grid(row=2, column=1, sticky="ew", padx=PAD_X, pady=PAD_Y)
+        ttk.Label(stats_frame, textvariable=self.export_files_var).grid(row=2, column=2, sticky=tk.W, padx=PAD_X, pady=PAD_Y)
 
-        ttk.Label(stats_frame, text="Upload Status:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
-        self.url_status_label = ttk.Label(stats_frame, textvariable=self.url_status_var, width=6, anchor="center", relief="sunken", foreground="grey") # Increased width
-        self.url_status_label.grid(row=3, column=1, sticky=tk.W, padx=5)
-        ttk.Label(stats_frame, textvariable=self.url_entries_var).grid(row=3, column=2, sticky=tk.W, padx=5)
+        ttk.Label(stats_frame, text="Upload Status:").grid(row=3, column=0, sticky=tk.W, padx=PAD_X, pady=PAD_Y)
+        self.url_status_label = ttk.Label(stats_frame, textvariable=self.url_status_var, width=5, anchor="center", relief="groove", borderwidth=1)
+        self.url_status_label.grid(row=3, column=1, sticky="ew", padx=PAD_X, pady=PAD_Y)
+        ttk.Label(stats_frame, textvariable=self.url_entries_var).grid(row=3, column=2, sticky=tk.W, padx=PAD_X, pady=PAD_Y)
 
         refresh_stats_button = ttk.Button(stats_frame, text="Refresh Stats", command=self.update_stats)
-        refresh_stats_button.grid(row=4, column=0, columnspan=3, pady=(10,0))
+        refresh_stats_button.grid(row=4, column=0, columnspan=3, pady=(PAD_Y*2, PAD_Y), padx=PAD_X, sticky=tk.EW)
 
-        # --- Actions Frame (Bottom-Left) --- Swapped with Stats
-        actions_frame = ttk.LabelFrame(main_frame, text="Actions", padding="10")
-        actions_frame.grid(row=1, column=0, padx=(0, 5), pady=(5, 0), sticky="nsew")
+        # --- Actions Frame (Bottom-Left) ---
+        actions_frame = ttk.LabelFrame(main_frame, text="Actions", padding=FRAME_PAD)
+        actions_frame.grid(row=1, column=0, padx=INTER_FRAME_PADX, pady=INTER_FRAME_PADY, sticky="nsew")
+        # We only need one column in actions_frame now, as each row's frame will span it.
         actions_frame.columnconfigure(0, weight=1)
-        actions_frame.columnconfigure(1, weight=1)
 
+        # Define padding for buttons inside the row frames
+        ROW_INTERNAL_PADY = 2 # Small vertical padding within rows with multiple buttons
+        ROW_INTER_BTN_PADX = 2 # Small horizontal padding between buttons within a row
+
+        # Row 0: Start Button (Keep it simple, spans the single column)
         self.start_button = ttk.Button(actions_frame, text="Start Script", command=self.start_script_action)
-        self.start_button.grid(row=0, column=0, columnspan=2, padx=5, pady=5, sticky=tk.EW)
+        self.start_button.grid(row=0, column=0, padx=PAD_X, pady=PAD_Y, sticky=tk.EW) # Uses standard PAD_X/Y
 
-        self.edit_button = ttk.Button(actions_frame, text="Edit CSV Entry", command=self.edit_entry_action)
-        self.edit_button.grid(row=1, column=0, padx=5, pady=5, sticky=tk.EW) # Placed on left
+        # --- Row 1: Edit and Fixer Buttons Frame ---
+        row1_frame = ttk.Frame(actions_frame)
+        row1_frame.grid(row=1, column=0, padx=0, pady=PAD_Y, sticky=tk.EW) # Use PAD_Y for vertical spacing between rows
+        row1_frame.columnconfigure(0, weight=1, uniform="actions_buttons_2col") # Uniform group for 2-button rows
+        row1_frame.columnconfigure(1, weight=1, uniform="actions_buttons_2col")
 
-        self.fixer_button = ttk.Button(actions_frame, text="Run Problem Fixer", command=self.run_problem_fixer_script)
-        self.fixer_button.grid(row=1, column=1, padx=5, pady=5, sticky=tk.EW) # Placed on right
+        self.edit_button = ttk.Button(row1_frame, text="Edit CSV Entry", command=self.edit_entry_action)
+        self.edit_button.grid(row=0, column=0, padx=(PAD_X, ROW_INTER_BTN_PADX), pady=ROW_INTERNAL_PADY, sticky=tk.EW) # Pad outside left, between right
+        self.fixer_button = ttk.Button(row1_frame, text="Run Problem Fixer", command=self.run_problem_fixer_script)
+        self.fixer_button.grid(row=0, column=1, padx=(ROW_INTER_BTN_PADX, PAD_X), pady=ROW_INTERNAL_PADY, sticky=tk.EW) # Pad between left, outside right
 
-        self.bulk_rename_button = ttk.Button(actions_frame, text="Bulk Rename Existing Items", command=self.bulk_rename_action)
-        self.bulk_rename_button.grid(row=2, column=0, padx=5, pady=5, sticky=tk.EW)
+        # --- Row 2: Bulk Action Buttons Frame ---
+        row2_frame = ttk.Frame(actions_frame)
+        row2_frame.grid(row=2, column=0, padx=0, pady=PAD_Y, sticky=tk.EW) # Use PAD_Y for vertical spacing
+        row2_frame.columnconfigure(0, weight=1, uniform="actions_buttons_2col") # Use same uniform group
+        row2_frame.columnconfigure(1, weight=1, uniform="actions_buttons_2col")
 
-        self.bulk_upload_button = ttk.Button(actions_frame, text="Bulk Upload Existing Items", command=self.bulk_upload_action)
-        self.bulk_upload_button.grid(row=2, column=1, padx=5, pady=5, sticky=tk.EW)
+        self.bulk_rename_button = ttk.Button(row2_frame, text="Bulk Rename Existing Items", command=self.bulk_rename_action)
+        self.bulk_rename_button.grid(row=0, column=0, padx=(PAD_X, ROW_INTER_BTN_PADX), pady=ROW_INTERNAL_PADY, sticky=tk.EW)
+        self.bulk_upload_button = ttk.Button(row2_frame, text="Bulk Upload Existing Items", command=self.bulk_upload_action)
+        self.bulk_upload_button.grid(row=0, column=1, padx=(ROW_INTER_BTN_PADX, PAD_X), pady=ROW_INTERNAL_PADY, sticky=tk.EW)
 
-        # --- File Buttons Here ---
+        # --- Row 3: File Buttons Frame ---
+        # Reuse existing variable name, but it's now just like row1/row2_frame conceptually
         file_button_frame = ttk.Frame(actions_frame)
-        file_button_frame.grid(row=3, column=0, columnspan=2, pady=(10,0), sticky=tk.EW) # Add padding top
-        file_button_frame.columnconfigure(0, weight=1)
-        file_button_frame.columnconfigure(1, weight=1)
-        file_button_frame.columnconfigure(2, weight=1)
+        file_button_frame.grid(row=3, column=0, padx=0, pady=PAD_Y, sticky=tk.EW) # Use PAD_Y for vertical spacing
+        # Configure 3 equal columns using a different uniform group
+        file_button_frame.columnconfigure(0, weight=1, uniform="actions_buttons_3col")
+        file_button_frame.columnconfigure(1, weight=1, uniform="actions_buttons_3col")
+        file_button_frame.columnconfigure(2, weight=1, uniform="actions_buttons_3col")
 
         open_log_button = ttk.Button(file_button_frame, text="Open Log", command=self.open_log_file)
-        open_log_button.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
+        open_log_button.grid(row=0, column=0, padx=(PAD_X, ROW_INTER_BTN_PADX), pady=ROW_INTERNAL_PADY, sticky=tk.EW) # Pad outside left
         open_csv_button = ttk.Button(file_button_frame, text="Open CSV", command=self.open_csv_file)
-        open_csv_button.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
+        open_csv_button.grid(row=0, column=1, padx=ROW_INTER_BTN_PADX, pady=ROW_INTERNAL_PADY, sticky=tk.EW) # Pad between both sides
         self.copy_csv_button = ttk.Button(file_button_frame, text="Copy CSV", command=self.copy_csv_data_to_clipboard)
-        self.copy_csv_button.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
-        if not PYPERCLIP_AVAILABLE: self.copy_csv_button.config(state=tk.DISABLED)
+        self.copy_csv_button.grid(row=0, column=2, padx=(ROW_INTER_BTN_PADX, PAD_X), pady=ROW_INTERNAL_PADY, sticky=tk.EW) # Pad outside right
+        try:
+            if not PYPERCLIP_AVAILABLE: self.copy_csv_button.config(state=tk.DISABLED)
+        except NameError: pass # Or handle defensively
 
-        # --- Help and Nuke Buttons ---
+        # --- Row 4: Help and Nuke Buttons Frame ---
+        # Reuse existing variable name
         bottom_button_frame = ttk.Frame(actions_frame)
-        bottom_button_frame.grid(row=4, column=0, columnspan=2, pady=(10,0), sticky=tk.EW) # Changed row
-        bottom_button_frame.columnconfigure(0, weight=1)
-        bottom_button_frame.columnconfigure(1, weight=1)
+        bottom_button_frame.grid(row=4, column=0, padx=0, pady=PAD_Y, sticky=tk.EW) # Use PAD_Y for vertical spacing
+        # Configure 2 equal columns, same uniform group as rows 1 & 2
+        bottom_button_frame.columnconfigure(0, weight=1, uniform="actions_buttons_2col")
+        bottom_button_frame.columnconfigure(1, weight=1, uniform="actions_buttons_2col")
 
         self.help_button = ttk.Button(bottom_button_frame, text="Help/Info", command=self.show_help_info)
-        self.help_button.grid(row=0, column=0, padx=5, pady=5, sticky=tk.EW)
+        self.help_button.grid(row=0, column=0, padx=(PAD_X, ROW_INTER_BTN_PADX), pady=ROW_INTERNAL_PADY, sticky=tk.EW)
 
         self.nuke_button = ttk.Button(bottom_button_frame, text="NUKE Directory", command=self.nuke_action)
+        # Apply the style configuration (Red text, default background)
         style = ttk.Style()
         style.configure("Nuke.TButton", foreground="red", font=('TkDefaultFont', 9, 'bold'))
+        style.map("Nuke.TButton", foreground=[('active', '#A00000'), ('disabled', 'grey')])
         self.nuke_button.configure(style="Nuke.TButton")
-        self.nuke_button.grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
+        self.nuke_button.grid(row=0, column=1, padx=(ROW_INTER_BTN_PADX, PAD_X), pady=ROW_INTERNAL_PADY, sticky=tk.EW)
 
+        # --- Status Frame (Bottom-Right) ---
+        status_frame = ttk.LabelFrame(main_frame, text="Status / Log", padding=FRAME_PAD)
+        status_frame.grid(row=1, column=1, padx=INTER_FRAME_PADX, pady=INTER_FRAME_PADY, sticky="nsew")
+        status_frame.rowconfigure(0, weight=1) # Make text widget expand vertically
+        status_frame.columnconfigure(0, weight=1) # Make text widget expand horizontally
 
-        # --- Status Frame (Bottom-Right) --- Swapped with Actions
-        status_frame = ttk.LabelFrame(main_frame, text="Status / Log", padding="10")
-        status_frame.grid(row=1, column=1, padx=(5, 0), pady=(5, 0), sticky="nsew")
-        status_frame.rowconfigure(0, weight=1) # Make text widget expand
-        status_frame.columnconfigure(0, weight=1)
-
-        self.status_text = tk.Text(status_frame, height=10, width=50, state=tk.DISABLED, wrap=tk.WORD, borderwidth=1, relief="sunken") # Adjusted size
+        self.status_text = tk.Text(status_frame, height=10, width=50, state=tk.DISABLED, wrap=tk.WORD, borderwidth=1, relief="sunken", font=("Consolas", 9))
         status_scrollbar = ttk.Scrollbar(status_frame, orient=tk.VERTICAL, command=self.status_text.yview)
         self.status_text.config(yscrollcommand=status_scrollbar.set)
-        self.status_text.grid(row=0, column=0, sticky="nsew") # Use grid
-        status_scrollbar.grid(row=0, column=1, sticky="ns") # Use grid
-    
+        self.status_text.grid(row=0, column=0, sticky="nsew")
+        status_scrollbar.grid(row=0, column=1, sticky="ns")
+
+        # REMOVED the calls to self.log_status and self.update_status_colors
+        # You should handle log initialization and status color updates
+        # elsewhere in your code, likely after create_widgets is called
+        # or within the methods that change the status (like update_stats).
+
     # --- Stats Update Method ---
     def update_stats(self):
         """Reads CSV and checks files to update the stats labels."""
