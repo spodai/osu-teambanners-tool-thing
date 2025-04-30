@@ -1,4 +1,4 @@
-# Team Banner Processing Scripts
+# Team Banner (flags) Processing Scripts
 
 This repository contains Python scripts for fetching images (from Google Drive or locally), renaming them, optionally uploading them to s-ul.eu, and logging the process.
 
@@ -23,22 +23,30 @@ pip install requests gdown configparser colorama Pillow pyperclip
 
 # For CLI versions only
 pip install requests gdown tabulate configparser colorama
+```
 
+## Usage
 
-Usage
-CLI Scripts
-Create a new directory for the script (e.g., "team_banners_cli").
-Place the desired script (team_banners.py or team_banners_lite.py) inside the new directory.
-Run the script from your terminal (e.g., python team_banners.py).
-Follow the prompts for configuration (Google Drive ID, API key, preferences) on the first run.
-For team_banners.py, select actions from the menu. team_banners_lite.py runs automatically after setup.
-GUI Scripts
-Ensure all required libraries (including Pillow and pyperclip) are installed.
-Run team_banners_Tkinter.py (e.g., python team_banners_Tkinter.py).
-Use the graphical interface to configure settings and perform actions.
-The "Problem Fixer" utility can be launched via a button in the main GUI.
-Directory Structure (Created by Scripts)
+### CLI Scripts
+
+1.  Create a new directory for the script (e.g., "team_banners_cli").
+2.  Place the desired script (`team_banners.py` or `team_banners_lite.py`) inside the new directory.
+3.  Run the script from your terminal (e.g., `python team_banners.py`).
+4.  Follow the prompts for configuration (Google Drive ID, API key, preferences) on the first run.
+5.  For `team_banners.py`, select actions from the menu. `team_banners_lite.py` runs automatically after setup.
+
+### GUI Scripts
+
+1.  Ensure all required libraries (including Pillow and pyperclip) are installed.
+2.  Run `team_banners_Tkinter.py` (e.g., `python team_banners_Tkinter.py`).
+3.  Use the graphical interface to configure settings and perform actions.
+4.  The "Problem Fixer" utility can be launched via a button in the main GUI.
+
+## Directory Structure (Created by Scripts)
+
 When run, the scripts will create the following structure within their directory:
+
+```
 .
 ├── settings.conf         # Configuration file
 ├── team_banners*.py      # The script file itself
@@ -50,10 +58,12 @@ When run, the scripts will create the following structure within their directory
 └── Images export/        # Renamed images ready for upload
     ├── TEAM1.jpg
     └── ...
+```
 
+*(Note: The GUI Problem Fixer creates `problem_fixer.log`)*
 
-(Note: The GUI Problem Fixer creates problem_fixer.log)
-Notes
-Terminal Recommendation (CLI): For the CLI scripts, using terminals like Windows PowerShell, cmd, MobaXterm, or Termius might provide a more stable experience than the default Python IDLE shell.
-Configuration: Settings are stored in settings.conf. You can edit this file directly or use the settings menu in the full CLI/GUI versions.
-Logging:
+## Notes
+
+-   **Terminal Recommendation (CLI):** For the CLI scripts, using terminals like Windows PowerShell, cmd, MobaXterm, or Termius might provide a more stable experience than the default Python IDLE shell.
+-   **Configuration:** Settings are stored in `settings.conf`. You can edit this file directly or use the settings menu in the full CLI/GUI versions.
+-   **Logging:** Detailed activity is logged to `.log` files if enabled in the settings.
