@@ -535,7 +535,29 @@ class UploaderApp:
         self.status_text.after(100, lambda: update_status_display(self.status_text))
         log_status(logging.INFO, "Application initialized.")
 
-    # --- GUI Creation Methods ---
+    def run_problem_fixer_script(self):
+        """Launches the problem_fixer.py script as a separate process."""
+        fixer_script_name = "problem_solver.py"
+        # Construct the path relative to the main script's directory
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        fixer_script_path = os.path.join(script_dir, fixer_script_name)
+
+        if not os.path.exists(fixer_script_path):
+            log_status(logging.ERROR, f"Problem Fixer script '{fixer_script_name}' not found in the script directory.")
+            messagebox.showerror("Error", f"Could not find the fixer script:\n{fixer_script_path}")
+            return
+
+        log_status(logging.INFO, f"Launching Problem Fixer script: {fixer_script_path}")
+        try:
+            # Use sys.executable to ensure it runs with the same Python interpreter
+            # Use Popen for non-blocking execution
+            subprocess.Popen([sys.executable, fixer_script_path])
+        except Exception as e:
+            log_status(logging.ERROR, f"Failed to launch Problem Fixer script: {e}")
+            messagebox.showerror("Launch Error", f"Failed to launch the fixer script:\n{e}")
+            logger.exception("Problem Fixer launch error")
+
+# --- GUI Creation Methods ---
     def create_widgets(self):
         # Main frame using grid
         main_frame = ttk.Frame(self.root, padding="10")
@@ -549,7 +571,7 @@ class UploaderApp:
 
         # --- Configuration Frame (Top-Left) ---
         config_frame = ttk.LabelFrame(main_frame, text="Configuration", padding="10")
-        config_frame.grid(row=0, column=0, padx=(0, 5), pady=(0, 5), sticky="new")
+        config_frame.grid(row=0, column=0, padx=(0, 5), pady=(0, 5), sticky="nsew") # Changed sticky
         config_frame.columnconfigure(1, weight=1) # Make entry fields expand
 
         ttk.Label(config_frame, text="Google Drive ID/URL:").grid(row=0, column=0, padx=5, pady=2, sticky=tk.W)
@@ -580,7 +602,7 @@ class UploaderApp:
         save_button = ttk.Button(config_frame, text="Save Configuration", command=self.save_config_action_with_popup)
         save_button.grid(row=4, column=0, columnspan=3, pady=10)
 
-        # --- Stats Frame (Top-Right) --- Changed row/column
+        # --- Stats Frame (Top-Right) --- Swapped with Actions
         stats_frame = ttk.LabelFrame(main_frame, text="Stats", padding="10")
         stats_frame.grid(row=0, column=1, padx=(5, 0), pady=(0, 5), sticky="nsew")
         stats_frame.columnconfigure(1, weight=0) # Status indicator column fixed width
@@ -606,7 +628,7 @@ class UploaderApp:
         refresh_stats_button = ttk.Button(stats_frame, text="Refresh Stats", command=self.update_stats)
         refresh_stats_button.grid(row=4, column=0, columnspan=3, pady=(10,0))
 
-        # --- Actions Frame (Bottom-Left) --- Changed row/column
+        # --- Actions Frame (Bottom-Left) --- Swapped with Stats
         actions_frame = ttk.LabelFrame(main_frame, text="Actions", padding="10")
         actions_frame.grid(row=1, column=0, padx=(0, 5), pady=(5, 0), sticky="nsew")
         actions_frame.columnconfigure(0, weight=1)
@@ -616,7 +638,10 @@ class UploaderApp:
         self.start_button.grid(row=0, column=0, columnspan=2, padx=5, pady=5, sticky=tk.EW)
 
         self.edit_button = ttk.Button(actions_frame, text="Edit CSV Entry", command=self.edit_entry_action)
-        self.edit_button.grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky=tk.EW) # Span across
+        self.edit_button.grid(row=1, column=0, padx=5, pady=5, sticky=tk.EW) # Placed on left
+
+        self.fixer_button = ttk.Button(actions_frame, text="Run Problem Fixer", command=self.run_problem_fixer_script)
+        self.fixer_button.grid(row=1, column=1, padx=5, pady=5, sticky=tk.EW) # Placed on right
 
         self.bulk_rename_button = ttk.Button(actions_frame, text="Bulk Rename Existing Items", command=self.bulk_rename_action)
         self.bulk_rename_button.grid(row=2, column=0, padx=5, pady=5, sticky=tk.EW)
@@ -624,7 +649,7 @@ class UploaderApp:
         self.bulk_upload_button = ttk.Button(actions_frame, text="Bulk Upload Existing Items", command=self.bulk_upload_action)
         self.bulk_upload_button.grid(row=2, column=1, padx=5, pady=5, sticky=tk.EW)
 
-        # --- Moved File Buttons Here ---
+        # --- File Buttons Here ---
         file_button_frame = ttk.Frame(actions_frame)
         file_button_frame.grid(row=3, column=0, columnspan=2, pady=(10,0), sticky=tk.EW) # Add padding top
         file_button_frame.columnconfigure(0, weight=1)
@@ -641,7 +666,7 @@ class UploaderApp:
 
         # --- Help and Nuke Buttons ---
         bottom_button_frame = ttk.Frame(actions_frame)
-        bottom_button_frame.grid(row=5, column=0, columnspan=2, pady=(10,0), sticky=tk.EW)
+        bottom_button_frame.grid(row=4, column=0, columnspan=2, pady=(10,0), sticky=tk.EW) # Changed row
         bottom_button_frame.columnconfigure(0, weight=1)
         bottom_button_frame.columnconfigure(1, weight=1)
 
@@ -655,17 +680,18 @@ class UploaderApp:
         self.nuke_button.grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
 
 
-        # --- Status Frame (Bottom-Right) --- Changed row/column
+        # --- Status Frame (Bottom-Right) --- Swapped with Actions
         status_frame = ttk.LabelFrame(main_frame, text="Status / Log", padding="10")
         status_frame.grid(row=1, column=1, padx=(5, 0), pady=(5, 0), sticky="nsew")
+        status_frame.rowconfigure(0, weight=1) # Make text widget expand
+        status_frame.columnconfigure(0, weight=1)
 
         self.status_text = tk.Text(status_frame, height=10, width=50, state=tk.DISABLED, wrap=tk.WORD, borderwidth=1, relief="sunken") # Adjusted size
-        self.status_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        scrollbar = ttk.Scrollbar(status_frame, orient=tk.VERTICAL, command=self.status_text.yview)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.status_text.config(yscrollcommand=scrollbar.set)
-
+        status_scrollbar = ttk.Scrollbar(status_frame, orient=tk.VERTICAL, command=self.status_text.yview)
+        self.status_text.config(yscrollcommand=status_scrollbar.set)
+        self.status_text.grid(row=0, column=0, sticky="nsew") # Use grid
+        status_scrollbar.grid(row=0, column=1, sticky="ns") # Use grid
+    
     # --- Stats Update Method ---
     def update_stats(self):
         """Reads CSV and checks files to update the stats labels."""
