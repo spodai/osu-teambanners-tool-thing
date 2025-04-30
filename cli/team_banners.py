@@ -1,41 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-## All written with GPT and Gemini (honestly Gemini did the harder cooking), but hey it works :D
-# A tool to fetch files from Google Drive OR local folder, upload them to s-ul.eu via API, and manage the process.
-# - Saves Google Drive ID, API key, color, logging, and upload preferences in a Config file.
-# - Creates a CSV log with: Timestamp, Original Filename, Renamed Filename, s-ul.eu URL.
-# - Allows editing entries (rename, re-upload, edit URL, delete).
-# - Allows bulk renaming of existing items in the CSV and bulk uploading of processed files.
-# - Subsequent runs skip files already processed and logged in the CSV.
-# - Conditionally logs activity to script_activity.log based on settings.
-# - Conditionally uses console colors based on settings.
-# - Conditionally uploads files based on settings.
-
-## Usage:
-# 1. Create a new directory (e.g., "team banners").
-# 2. Place this script (team_banners.py) inside the new directory.
-# 3. Run the script.
-# 4. Follow the prompts (Drive ID, API key, color/logging/upload preferences).
-# 5. Select desired action from the main menu.
-
-## Note:
-# You may wanna run this in pwsh or cmd or mobaxterm or termius or whatnot, the python cli itself wasn't stable in my testings :^)
-
-## Directory structure created by the script:
-# .
-# ├── settings.conf      (Configuration file)
-# ├── team_banners.py    (This script)
-# ├── index.csv          (Log of processed files)
-# ├── script_activity.log(Activity log file - if enabled)
-# ├── Images import/     (Downloaded files from GDrive OR where user places local files)
-# │   ├── image_01.jpg
-# │   ├── image_02.jpg
-# │   └── ...
-# └── Images export/     (Renamed files for s-ul.eu upload)
-#     ├── TEAM1.jpg
-#     ├── TEAM2.jpg
-#     └── ...
+# CLI tool to fetch images (Drive/Local), rename, upload to s-ul.eu, and manage logs.
 
 ## Install required libraries:
 # pip install requests gdown tabulate configparser colorama
