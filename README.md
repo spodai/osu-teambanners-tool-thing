@@ -59,11 +59,3 @@ When run, the scripts will create the following structure within their directory
     ├── TEAM1.jpg
     └── ...
 ```
-
-*(Note: The GUI Problem Fixer creates `problem_fixer.log`)*
-
-## Notes
-
--   **Terminal Recommendation (CLI):** For the CLI scripts, using terminals like Windows PowerShell, cmd, MobaXterm, or Termius might provide a more stable experience than the default Python IDLE shell.
--   **Configuration:** Settings are stored in `settings.conf`. You can edit this file directly or use the settings menu in the full CLI/GUI versions.
--   **Logging:** Detailed activity is logged to `.log` files if enabled in the settings.
